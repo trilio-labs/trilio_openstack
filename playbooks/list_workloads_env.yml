@@ -1,0 +1,26 @@
+---
+# Example: Listing Trilio Workloads using active OpenStack Environment Variables
+#
+# Assumes you have sourced your standard OpenStack RC file:
+#   source openrc.sh  (or export OS_AUTH_URL, OS_USERNAME, OS_PASSWORD, etc.)
+#
+# No clouds.yaml or hardcoded credentials needed.
+
+- name: Query Trilio Workloads using Environment Variables
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Retrieve all workloads in the project
+      trilio.trilio_openstack.workload_info:
+      register: workload_result
+
+    - name: Display summary of discovered workloads
+      ansible.builtin.debug:
+        msg: >-
+          Found {{ workload_result.workloads | length }} workload(s) in project.
+          Workload names: {{ workload_result.workloads | map(attribute='name') | list }}
+
+    - name: Display complete workload details
+      ansible.builtin.debug:
+        var: workload_result.workloads

@@ -139,7 +139,23 @@ class TrilioClient:
         try:
             self.conn = openstack.connect(**conn_kwargs)
         except Exception as e:
-            self.module.fail_json(msg="Failed to connect to OpenStack: %s" % str(e))
+            # If a named cloud was passed (e.g. 'openstack') but not found in clouds.yaml,
+            # and OS_* environment variables are present, automatically retry with environment variables
+            err_msg = str(e).lower()
+            if ('not found' in err_msg or 'no such cloud' in err_msg) and os.environ.get('OS_AUTH_URL'):
+                try:
+                    conn_kwargs.pop('cloud', None)
+                    self.conn = openstack.connect(**conn_kwargs)
+                except Exception as env_err:
+                    if HAS_REQUESTS:
+                        self._auth_via_keystone_rest()
+                        return
+                    self.module.fail_json(msg="Failed to connect to OpenStack using environment variables: %s" % str(env_err))
+            elif HAS_REQUESTS and os.environ.get('OS_AUTH_URL'):
+                self._auth_via_keystone_rest()
+                return
+            else:
+                self.module.fail_json(msg="Failed to connect to OpenStack: %s" % str(e))
 
         try:
             # Extract Keystone token
@@ -150,6 +166,9 @@ class TrilioClient:
                 self.token = self.conn.auth_token
                 self.project_id = getattr(self.conn, 'current_project_id', None)
         except Exception as e:
+            if HAS_REQUESTS and os.environ.get('OS_AUTH_URL'):
+                self._auth_via_keystone_rest()
+                return
             self.module.fail_json(msg="Failed to obtain Keystone authentication token: %s" % str(e))
 
         # Discover or set Trilio endpoint
@@ -165,9 +184,10 @@ class TrilioClient:
         auth_url = auth_dict.get('auth_url') or os.environ.get('OS_AUTH_URL')
         username = auth_dict.get('username') or os.environ.get('OS_USERNAME')
         password = auth_dict.get('password') or os.environ.get('OS_PASSWORD')
-        project_name = auth_dict.get('project_name') or os.environ.get('OS_PROJECT_NAME')
-        user_domain = auth_dict.get('user_domain_name') or os.environ.get('OS_USER_DOMAIN_NAME', 'Default')
-        project_domain = auth_dict.get('project_domain_name') or os.environ.get('OS_PROJECT_DOMAIN_NAME', 'Default')
+        project_name = auth_dict.get('project_name') or os.environ.get('OS_PROJECT_NAME') or os.environ.get('OS_TENANT_NAME')
+        project_id = auth_dict.get('project_id') or os.environ.get('OS_PROJECT_ID') or os.environ.get('OS_TENANT_ID')
+        user_domain = auth_dict.get('user_domain_name') or os.environ.get('OS_USER_DOMAIN_NAME') or os.environ.get('OS_USER_DOMAIN_ID', 'Default')
+        project_domain = auth_dict.get('project_domain_name') or os.environ.get('OS_PROJECT_DOMAIN_NAME') or os.environ.get('OS_PROJECT_DOMAIN_ID', 'Default')
         app_cred_id = auth_dict.get('application_credential_id') or os.environ.get('OS_APPLICATION_CREDENTIAL_ID')
         app_cred_secret = auth_dict.get('application_credential_secret') or os.environ.get('OS_APPLICATION_CREDENTIAL_SECRET')
 
@@ -198,6 +218,16 @@ class TrilioClient:
                 }
             }
         elif username and password:
+            scope = {}
+            if project_id:
+                scope = {"project": {"id": project_id}}
+            elif project_name:
+                scope = {
+                    "project": {
+                        "name": project_name,
+                        "domain": {"name": project_domain}
+                    }
+                }
             auth_body = {
                 "auth": {
                     "identity": {
@@ -210,12 +240,7 @@ class TrilioClient:
                             }
                         }
                     },
-                    "scope": {
-                        "project": {
-                            "name": project_name,
-                            "domain": {"name": project_domain}
-                        }
-                    }
+                    "scope": scope
                 }
             }
         else:
@@ -244,7 +269,7 @@ class TrilioClient:
             data = resp.json()
             token_info = data.get('token', {})
             project_info = token_info.get('project', {})
-            self.project_id = project_info.get('id')
+            self.project_id = project_info.get('id') or project_id
             self._catalog = token_info.get('catalog', [])
         except Exception as e:
             self.module.fail_json(msg="Failed to parse Keystone token response: %s" % str(e))
@@ -268,11 +293,25 @@ class TrilioClient:
         if self.conn:
             for s_type in TRILIO_SERVICE_TYPES:
                 try:
-                    ep = self.conn.get_endpoint(
-                        service_type=s_type,
-                        interface=interface,
-                        region_name=region_name
-                    )
+                    ep = None
+                    if hasattr(self.conn, 'get_endpoint'):
+                        ep = self.conn.get_endpoint(
+                            service_type=s_type,
+                            interface=interface,
+                            region_name=region_name
+                        )
+                    elif hasattr(self.conn, 'endpoint_for'):
+                        ep = self.conn.endpoint_for(
+                            service_type=s_type,
+                            interface=interface,
+                            region_name=region_name
+                        )
+                    if not ep and hasattr(self.conn, 'session') and hasattr(self.conn.session, 'get_endpoint'):
+                        ep = self.conn.session.get_endpoint(
+                            service_type=s_type,
+                            interface=interface,
+                            region_name=region_name
+                        )
                     if ep:
                         self.endpoint = self._format_endpoint(ep)
                         return
