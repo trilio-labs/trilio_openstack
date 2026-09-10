@@ -154,16 +154,16 @@ workloads:
 
 All example playbooks are available in the [`playbooks/`](playbooks/) directory:
 
-### 1. Authenticating via `clouds.yaml` (`playbooks/list_workloads_clouds_yaml.yml`)
+### 1. Authenticating via Environment Variables (`playbooks/list_workloads_env.yml`)
+When you have sourced your OpenStack RC file (`source openrc.sh`):
 ```yaml
-- name: List Trilio workloads using clouds.yaml
+- name: List Trilio workloads using active environment variables
   hosts: localhost
   gather_facts: false
 
   tasks:
     - name: Fetch workloads
       trilio.trilio_openstack.workload_info:
-        cloud: openstack
       register: result
 
     - name: Print discovered workloads
@@ -171,7 +171,49 @@ All example playbooks are available in the [`playbooks/`](playbooks/) directory:
         msg: "Discovered {{ result.workloads | length }} workload(s): {{ result.workloads | map(attribute='name') | list }}"
 ```
 
-### 2. Authenticating via Keystone Application Credentials (`playbooks/list_workloads_app_cred.yml`)
+### 2. Authenticating via `clouds.yaml` (`playbooks/list_workloads_clouds_yaml.yml`)
+When using `~/.config/openstack/clouds.yaml`:
+```yaml
+- name: List Trilio workloads using clouds.yaml
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
+
+  tasks:
+    - name: Fetch workloads
+      trilio.trilio_openstack.workload_info:
+        cloud: "{{ cloud_name }}"
+      register: result
+
+    - name: Print discovered workloads
+      ansible.builtin.debug:
+        msg: "Discovered {{ result.workloads | length }} workload(s): {{ result.workloads | map(attribute='name') | list }}"
+```
+
+### 3. Authenticating via Explicit `auth` Dictionary (`playbooks/list_workloads_auth_dict.yml`)
+When credentials are passed dynamically from variables or Ansible Vault:
+```yaml
+- name: List Trilio workloads using Keystone Auth Dictionary
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Fetch workloads using Keystone v3 credentials
+      trilio.trilio_openstack.workload_info:
+        auth:
+          auth_url: "{{ lookup('ansible.builtin.env', 'OS_AUTH_URL') }}"
+          username: "{{ lookup('ansible.builtin.env', 'OS_USERNAME') }}"
+          password: "{{ lookup('ansible.builtin.env', 'OS_PASSWORD') }}"
+          project_name: "{{ lookup('ansible.builtin.env', 'OS_PROJECT_NAME') | default(lookup('ansible.builtin.env', 'OS_TENANT_NAME'), true) }}"
+          user_domain_name: "{{ lookup('ansible.builtin.env', 'OS_USER_DOMAIN_NAME') | default('Default', true) }}"
+          project_domain_name: "{{ lookup('ansible.builtin.env', 'OS_PROJECT_DOMAIN_NAME') | default('Default', true) }}"
+        validate_certs: "{{ (lookup('ansible.builtin.env', 'OS_INSECURE') | lower != 'true') and (lookup('ansible.builtin.env', 'OS_VERIFY') | default('true', true) | bool) }}"
+      register: result
+```
+
+### 4. Authenticating via Keystone Application Credentials (`playbooks/list_workloads_app_cred.yml`)
 ```yaml
 - name: List Trilio workloads using Application Credentials
   hosts: localhost
@@ -183,27 +225,33 @@ All example playbooks are available in the [`playbooks/`](playbooks/) directory:
         auth_type: v3applicationcredential
         auth:
           auth_url: "{{ lookup('ansible.builtin.env', 'OS_AUTH_URL') }}"
-          application_credential_id: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_ID') }}"
+          application_credential_id: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_ID') | default(omit, true) }}"
+          application_credential_name: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_NAME') | default(omit, true) }}"
           application_credential_secret: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_SECRET') }}"
+        validate_certs: "{{ (lookup('ansible.builtin.env', 'OS_INSECURE') | lower != 'true') and (lookup('ansible.builtin.env', 'OS_VERIFY') | default('true', true) | bool) }}"
       register: result
 ```
 
-### 3. Complementary Workflow with `openstack.cloud` (`playbooks/list_workloads_combined.yml`)
-Demonstrates how both collections work together in a single playbook to cross-reference OpenStack compute instances with Trilio backup workloads:
+### 5. Complementary Workflow with `openstack.cloud` (`playbooks/list_workloads_combined.yml`)
+Demonstrates how both collections work together in a single playbook to cross-reference OpenStack compute instances with Trilio backup workloads (supports both `clouds.yaml` and active environment variables seamlessly):
 ```yaml
 - name: Audit OpenStack VMs and Trilio Protection
   hosts: localhost
   gather_facts: false
 
+  vars:
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default(omit, true) }}"
+
   tasks:
     - name: Retrieve all compute instances
       openstack.cloud.server_info:
-        cloud: openstack
+        cloud: "{{ cloud_name | default(omit) }}"
       register: nova_servers
 
     - name: Retrieve all Trilio workloads
       trilio.trilio_openstack.workload_info:
-        cloud: openstack
+        cloud: "{{ cloud_name | default(omit) }}"
+        detailed: true
       register: trilio_workloads
 
     - name: Build list of protected VM IDs

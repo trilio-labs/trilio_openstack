@@ -14,17 +14,19 @@
   gather_facts: false
 
   vars:
-    cloud_name: openstack
+    # Uses OS_CLOUD if set, otherwise omits 'cloud' to seamlessly use active OS_* environment variables.
+    # Can also be explicitly specified on the command line: -e cloud_name=openstack
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default(omit, true) }}"
 
   tasks:
     - name: 1. Gather all Nova compute instances in the project
       openstack.cloud.server_info:
-        cloud: "{{ cloud_name }}"
+        cloud: "{{ cloud_name | default(omit) }}"
       register: nova_servers
 
     - name: 2. Gather all Trilio workloads in the project
       trilio.trilio_openstack.workload_info:
-        cloud: "{{ cloud_name }}"
+        cloud: "{{ cloud_name | default(omit) }}"
         detailed: true
       register: trilio_workloads
 

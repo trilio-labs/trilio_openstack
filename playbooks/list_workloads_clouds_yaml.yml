@@ -10,7 +10,7 @@
   gather_facts: false
 
   vars:
-    cloud_name: openstack
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
 
   tasks:
     - name: Retrieve all workloads in the project

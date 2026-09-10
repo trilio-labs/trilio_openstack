@@ -47,7 +47,7 @@ def trilio_argument_spec(**kwargs):
         auth_type=dict(type='str'),
         auth=dict(type='dict', no_log=True),
         region_name=dict(type='str'),
-        validate_certs=dict(type='bool', default=True, aliases=['verify']),
+        validate_certs=dict(type='bool', aliases=['verify']),
         ca_cert=dict(type='str', aliases=['cacert']),
         client_cert=dict(type='str', aliases=['cert']),
         client_key=dict(type='str', no_log=True, aliases=['key']),
@@ -81,10 +81,20 @@ class TrilioClient:
         self.project_id = None
         self.endpoint = None
         self.conn = None
-        self.session = None
-        self.verify = self.params.get('validate_certs', True)
+        validate_certs = self.params.get('validate_certs')
+        if validate_certs is not None:
+            self.verify = validate_certs
+        elif os.environ.get('OS_INSECURE', '').lower() in ('true', '1', 'yes'):
+            self.verify = False
+        elif os.environ.get('OS_VERIFY', '').lower() in ('false', '0', 'no'):
+            self.verify = False
+        else:
+            self.verify = True
+
         if self.params.get('ca_cert'):
             self.verify = self.params.get('ca_cert')
+        elif os.environ.get('OS_CACERT'):
+            self.verify = os.environ.get('OS_CACERT')
         self.timeout = self.params.get('timeout', 180)
 
         # 1. Authenticate to Keystone and discover endpoint
@@ -127,8 +137,12 @@ class TrilioClient:
                 conn_kwargs['interface'] = self.params.get('interface')
             if self.params.get('validate_certs') is not None:
                 conn_kwargs['verify'] = self.params.get('validate_certs')
+            elif not self.verify:
+                conn_kwargs['verify'] = False
             if self.params.get('ca_cert'):
                 conn_kwargs['cacert'] = self.params.get('ca_cert')
+            elif os.environ.get('OS_CACERT'):
+                conn_kwargs['cacert'] = os.environ.get('OS_CACERT')
             if self.params.get('client_cert'):
                 conn_kwargs['cert'] = self.params.get('client_cert')
             if self.params.get('client_key'):

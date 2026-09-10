@@ -23,7 +23,7 @@ class TestTrilioModuleUtils(unittest.TestCase):
         self.assertIn('interface', spec)
         self.assertIn('trilio_endpoint', spec)
         self.assertEqual(spec['interface']['default'], 'public')
-        self.assertTrue(spec['validate_certs']['default'])
+        self.assertIn('verify', spec['validate_certs']['aliases'])
 
     def test_format_endpoint(self):
         module = MagicMock()
