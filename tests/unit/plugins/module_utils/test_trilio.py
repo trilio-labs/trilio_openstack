@@ -80,6 +80,32 @@ class TestTrilioModuleUtils(unittest.TestCase):
             client._resolve_endpoint()
             self.assertEqual(client.endpoint, 'http://trilio-public:8780/v1/proj-999')
 
+    def test_resolve_endpoint_triliovaultwlm_catalog(self):
+        module = MagicMock()
+        module.params = {
+            'trilio_endpoint': None,
+            'interface': 'public',
+            'validate_certs': True,
+            'timeout': 30
+        }
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.project_id = None
+            client._catalog = [
+                {
+                    'type': 'workloads',
+                    'name': 'TrilioVaultWLM',
+                    'endpoints': [
+                        {'interface': 'admin', 'region': 'regionOne', 'url': 'http://172.22.5.22:8781/v1/3f366be9754044209cf669d62f402bfc'},
+                        {'interface': 'internal', 'region': 'regionOne', 'url': 'http://172.22.5.22:8781/v1/3f366be9754044209cf669d62f402bfc'},
+                        {'interface': 'public', 'region': 'regionOne', 'url': 'http://172.22.5.22:8781/v1/3f366be9754044209cf669d62f402bfc'}
+                    ]
+                }
+            ]
+            client._resolve_endpoint()
+            self.assertEqual(client.endpoint, 'http://172.22.5.22:8781/v1/3f366be9754044209cf669d62f402bfc')
+            self.assertEqual(client.project_id, '3f366be9754044209cf669d62f402bfc')
+
     def test_list_workloads_request(self):
         module = MagicMock()
         module.params = {

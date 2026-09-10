@@ -33,7 +33,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 
-TRILIO_SERVICE_TYPES = ['workloads', 'workloadmgr', 'triliovault', 'backup']
+TRILIO_SERVICE_TYPES = ['workloads', 'workloadmgr', 'triliovault', 'triliovaultwlm', 'wlm', 'backup']
 
 
 def trilio_argument_spec(**kwargs):
@@ -165,11 +165,39 @@ class TrilioClient:
             elif hasattr(self.conn, 'auth_token'):
                 self.token = self.conn.auth_token
                 self.project_id = getattr(self.conn, 'current_project_id', None)
+
+            if not self.project_id and hasattr(self.conn, 'current_project_id'):
+                self.project_id = self.conn.current_project_id
         except Exception as e:
             if HAS_REQUESTS and os.environ.get('OS_AUTH_URL'):
                 self._auth_via_keystone_rest()
                 return
             self.module.fail_json(msg="Failed to obtain Keystone authentication token: %s" % str(e))
+
+        # Extract Keystone service catalog from openstacksdk connection
+        try:
+            if hasattr(self.conn, 'session') and self.conn.session and self.conn.session.auth:
+                access = self.conn.session.auth.get_access(self.conn.session)
+                if hasattr(access, 'service_catalog'):
+                    sc = access.service_catalog
+                    if hasattr(sc, 'get_data'):
+                        self._catalog = sc.get_data()
+                    elif hasattr(sc, 'catalog'):
+                        self._catalog = sc.catalog
+        except Exception:
+            pass
+
+        if not getattr(self, '_catalog', None) and hasattr(self.conn, 'service_catalog'):
+            try:
+                sc = self.conn.service_catalog
+                if hasattr(sc, 'get_data'):
+                    self._catalog = sc.get_data()
+                elif hasattr(sc, 'catalog'):
+                    self._catalog = sc.catalog
+                elif isinstance(sc, list):
+                    self._catalog = sc
+            except Exception:
+                pass
 
         # Discover or set Trilio endpoint
         self._resolve_endpoint()
@@ -284,57 +312,122 @@ class TrilioClient:
         # 1. Check explicit override
         if self.params.get('trilio_endpoint'):
             self.endpoint = self.params['trilio_endpoint'].rstrip('/')
+            self._post_process_endpoint()
             return
 
         interface = self.params.get('interface', 'public')
-        region_name = self.params.get('region_name')
+        region_name = self.params.get('region_name') or os.environ.get('OS_REGION_NAME')
 
-        # 2. Try openstacksdk endpoint discovery
+        # Extract service catalog if not already cached
+        catalog = getattr(self, '_catalog', None)
+        if not catalog and self.conn:
+            try:
+                if hasattr(self.conn, 'session') and self.conn.session and self.conn.session.auth:
+                    access = self.conn.session.auth.get_access(self.conn.session)
+                    if hasattr(access, 'service_catalog'):
+                        sc = access.service_catalog
+                        if hasattr(sc, 'get_data'):
+                            catalog = sc.get_data()
+                        elif hasattr(sc, 'catalog'):
+                            catalog = sc.catalog
+            except Exception:
+                pass
+            if not catalog and hasattr(self.conn, 'service_catalog'):
+                sc = self.conn.service_catalog
+                if hasattr(sc, 'get_data'):
+                    catalog = sc.get_data()
+                elif hasattr(sc, 'catalog'):
+                    catalog = sc.catalog
+                elif isinstance(sc, list):
+                    catalog = sc
+
+        # 2. Inspect raw service catalog (handles custom names like TrilioVaultWLM and standard type workloads)
+        if catalog:
+            for entry in catalog:
+                s_type = str(entry.get('type') or '').strip().lower()
+                s_name = str(entry.get('name') or '').strip().lower()
+                if s_type in TRILIO_SERVICE_TYPES or s_name in TRILIO_SERVICE_TYPES:
+                    endpoints = entry.get('endpoints', [])
+                    # Match exact interface and region
+                    for ep in endpoints:
+                        ep_interface = ep.get('interface')
+                        ep_region = ep.get('region') or ep.get('region_id')
+                        url = ep.get('url') or (ep.get('publicURL') if interface == 'public' else (ep.get('internalURL') if interface == 'internal' else ep.get('adminURL')))
+                        if url:
+                            if not ep_interface or ep_interface == interface:
+                                if not region_name or ep_region == region_name:
+                                    self.endpoint = self._format_endpoint(url)
+                                    self._post_process_endpoint()
+                                    return
+                    # Fallback to matching interface across any region
+                    for ep in endpoints:
+                        ep_interface = ep.get('interface')
+                        url = ep.get('url') or (ep.get('publicURL') if interface == 'public' else (ep.get('internalURL') if interface == 'internal' else ep.get('adminURL')))
+                        if url and (not ep_interface or ep_interface == interface):
+                            self.endpoint = self._format_endpoint(url)
+                            self._post_process_endpoint()
+                            return
+                    # Fallback to any URL for this service
+                    for ep in endpoints:
+                        url = ep.get('url') or ep.get('publicURL') or ep.get('internalURL') or ep.get('adminURL')
+                        if url:
+                            self.endpoint = self._format_endpoint(url)
+                            self._post_process_endpoint()
+                            return
+
+        # 3. Try keystoneauth session get_endpoint
+        if self.conn and hasattr(self.conn, 'session') and self.conn.session:
+            for s_identifier in TRILIO_SERVICE_TYPES:
+                for arg_key in ['service_type', 'service_name']:
+                    try:
+                        kwargs = {arg_key: s_identifier, 'interface': interface}
+                        if region_name:
+                            kwargs['region_name'] = region_name
+                        ep = self.conn.session.get_endpoint(**kwargs)
+                        if ep:
+                            self.endpoint = self._format_endpoint(ep)
+                            self._post_process_endpoint()
+                            return
+                    except Exception:
+                        pass
+
+        # 4. Try openstacksdk connection endpoint discovery
         if self.conn:
-            for s_type in TRILIO_SERVICE_TYPES:
+            for s_identifier in TRILIO_SERVICE_TYPES:
                 try:
+                    kwargs = {'service_type': s_identifier, 'interface': interface}
+                    if region_name:
+                        kwargs['region_name'] = region_name
                     ep = None
                     if hasattr(self.conn, 'get_endpoint'):
-                        ep = self.conn.get_endpoint(
-                            service_type=s_type,
-                            interface=interface,
-                            region_name=region_name
-                        )
+                        ep = self.conn.get_endpoint(**kwargs)
                     elif hasattr(self.conn, 'endpoint_for'):
-                        ep = self.conn.endpoint_for(
-                            service_type=s_type,
-                            interface=interface,
-                            region_name=region_name
-                        )
-                    if not ep and hasattr(self.conn, 'session') and hasattr(self.conn.session, 'get_endpoint'):
-                        ep = self.conn.session.get_endpoint(
-                            service_type=s_type,
-                            interface=interface,
-                            region_name=region_name
-                        )
+                        ep = self.conn.endpoint_for(**kwargs)
                     if ep:
                         self.endpoint = self._format_endpoint(ep)
+                        self._post_process_endpoint()
                         return
                 except Exception:
                     continue
 
-        # 3. Try catalog inspection from Keystone REST token response
-        catalog = getattr(self, '_catalog', None)
+        found_services = []
         if catalog:
             for entry in catalog:
-                s_type = entry.get('type')
-                s_name = entry.get('name')
-                if s_type in TRILIO_SERVICE_TYPES or s_name in TRILIO_SERVICE_TYPES:
-                    for ep in entry.get('endpoints', []):
-                        if ep.get('interface') == interface:
-                            if not region_name or ep.get('region') == region_name:
-                                self.endpoint = self._format_endpoint(ep.get('url'))
-                                return
+                found_services.append("%s (%s)" % (entry.get('name'), entry.get('type')))
+        msg = "Trilio Workload Manager service (workloads/workloadmgr/TrilioVaultWLM) not found in Keystone catalog."
+        if found_services:
+            msg += " Available services in catalog: [%s]." % ", ".join(found_services)
+        msg += " Specify 'trilio_endpoint' parameter in your task or register Trilio in the service catalog."
+        self.module.fail_json(msg=msg)
 
-        self.module.fail_json(
-            msg="Trilio Workload Manager service (workloads/workloadmgr) not found in Keystone catalog. "
-                "Specify 'trilio_endpoint' parameter in your task or register Trilio in the service catalog."
-        )
+    def _post_process_endpoint(self):
+        """
+        Extracts project_id from endpoint URL if not already determined.
+        """
+        if not self.project_id and self.endpoint:
+            m = re.search(r'/v1/([0-9a-fA-F]{32}|[0-9a-fA-F-]{36})', self.endpoint)
+            if m:
+                self.project_id = m.group(1)
 
     def _format_endpoint(self, url):
         """
