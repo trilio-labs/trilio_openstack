@@ -1,0 +1,29 @@
+---
+# Example: Listing Trilio Workloads using clouds.yaml
+#
+# This playbook demonstrates authenticating to OpenStack Keystone using a named cloud
+# entry from ~/.config/openstack/clouds.yaml.
+# This complements standard openstack.cloud modules without reinventing authentication.
+
+- name: Query Trilio Workloads using clouds.yaml
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cloud_name: openstack
+
+  tasks:
+    - name: Retrieve all workloads in the project
+      trilio.trilio_openstack.workload_info:
+        cloud: "{{ cloud_name }}"
+      register: workload_result
+
+    - name: Display summary of discovered workloads
+      ansible.builtin.debug:
+        msg: >-
+          Found {{ workload_result.workloads | length }} workload(s) in project.
+          Workload names: {{ workload_result.workloads | map(attribute='name') | list }}
+
+    - name: Display complete workload details
+      ansible.builtin.debug:
+        var: workload_result.workloads

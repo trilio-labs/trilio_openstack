@@ -1,0 +1,4 @@
+# Python requirements for trilio.trilio_openstack Ansible Collection
+openstacksdk>=1.0.0
+requests>=2.25.0
+keystoneauth1>=4.0.0

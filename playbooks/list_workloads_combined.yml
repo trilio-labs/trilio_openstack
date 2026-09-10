@@ -1,0 +1,49 @@
+---
+# Example: Complementary OpenStack and Trilio Workflow
+#
+# This playbook demonstrates how trilio.trilio_openstack seamlessly complements
+# standard openstack.cloud modules using the identical Keystone authentication context.
+#
+# It performs the following:
+# 1. Queries Nova compute instances using openstack.cloud.server_info.
+# 2. Queries Trilio backup workloads using trilio.trilio_openstack.workload_info.
+# 3. Cross-references VMs to report which instances are currently protected by a Trilio workload.
+
+- name: Audit OpenStack VMs and Trilio Protection Status
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cloud_name: openstack
+
+  tasks:
+    - name: 1. Gather all Nova compute instances in the project
+      openstack.cloud.server_info:
+        cloud: "{{ cloud_name }}"
+      register: nova_servers
+
+    - name: 2. Gather all Trilio workloads in the project
+      trilio.trilio_openstack.workload_info:
+        cloud: "{{ cloud_name }}"
+        detailed: true
+      register: trilio_workloads
+
+    - name: 3. Extract protected instance IDs from Trilio workloads
+      ansible.builtin.set_fact:
+        protected_instance_ids: >-
+          {{
+            trilio_workloads.workloads
+            | map(attribute='instances')
+            | flatten
+            | map(attribute='id')
+            | list
+          }}
+
+    - name: 4. Display protection audit report
+      ansible.builtin.debug:
+        msg: >-
+          Instance '{{ item.name }}' (ID: {{ item.id }}) is
+          {{ 'PROTECTED by Trilio' if item.id in protected_instance_ids else 'UNPROTECTED - No Trilio Workload found' }}.
+      loop: "{{ nova_servers.servers }}"
+      loop_control:
+        label: "{{ item.name }}"

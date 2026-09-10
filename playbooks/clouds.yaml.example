@@ -1,0 +1,43 @@
+# Example OpenStack Clouds Configuration File (~/.config/openstack/clouds.yaml)
+#
+# IMPORTANT SECURITY NOTE:
+# Never commit credentials, passwords, or secrets to Git or public repositories.
+# Keep this file protected with strict permissions: chmod 0600 ~/.config/openstack/clouds.yaml
+# You can also separate public cloud definitions in clouds.yaml and secret tokens in secure.yaml.
+
+clouds:
+  # Example 1: Standard Username / Password authentication to Keystone v3
+  openstack:
+    auth:
+      auth_url: https://keystone.example.com:5000/v3
+      username: devops-user
+      password: "<STORE_IN_SECURE_VAULT_OR_ENV>"
+      project_name: production-workloads
+      user_domain_name: Default
+      project_domain_name: Default
+    region_name: RegionOne
+    interface: public
+    identity_api_version: 3
+
+  # Example 2: Modern Keystone Application Credentials (recommended for CI/CD and automation)
+  openstack-appcred:
+    auth_type: v3applicationcredential
+    auth:
+      auth_url: https://keystone.example.com:5000/v3
+      application_credential_id: "a1b2c3d4e5f6789012345678abcdef01"
+      application_credential_secret: "<STORE_IN_SECURE_VAULT_OR_ENV>"
+    region_name: RegionOne
+    interface: public
+
+  # Example 3: Cloud Administrator with internal interface access
+  openstack-admin:
+    auth:
+      auth_url: https://keystone-internal.example.com:5000/v3
+      username: admin
+      password: "<STORE_IN_SECURE_VAULT_OR_ENV>"
+      project_name: admin
+      user_domain_name: Default
+      project_domain_name: Default
+    region_name: RegionOne
+    interface: internal
+    identity_api_version: 3

@@ -1,0 +1,24 @@
+---
+# Example: Listing Trilio Workloads using Keystone Application Credentials
+#
+# Application Credentials provide short- or long-lived service tokens tied to a project,
+# eliminating the need to expose user passwords in automation pipelines.
+
+- name: Query Trilio Workloads using Keystone Application Credentials
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Fetch workloads using application credentials
+      trilio.trilio_openstack.workload_info:
+        auth_type: v3applicationcredential
+        auth:
+          auth_url: "{{ lookup('ansible.builtin.env', 'OS_AUTH_URL') }}"
+          application_credential_id: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_ID') }}"
+          application_credential_secret: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_SECRET') }}"
+        validate_certs: true
+      register: workload_result
+
+    - name: Display discovered workloads
+      ansible.builtin.debug:
+        var: workload_result.workloads

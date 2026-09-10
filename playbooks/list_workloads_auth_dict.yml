@@ -1,0 +1,26 @@
+---
+# Example: Listing Trilio Workloads using an explicit Keystone auth dictionary
+#
+# Credentials are read dynamically from environment variables or Ansible Vault.
+# No secrets or passwords are stored in this playbook file.
+
+- name: Query Trilio Workloads using Keystone Auth Dictionary
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Fetch workloads using Keystone v3 credentials
+      trilio.trilio_openstack.workload_info:
+        auth:
+          auth_url: "{{ lookup('ansible.builtin.env', 'OS_AUTH_URL') }}"
+          username: "{{ lookup('ansible.builtin.env', 'OS_USERNAME') }}"
+          password: "{{ lookup('ansible.builtin.env', 'OS_PASSWORD') }}"
+          project_name: "{{ lookup('ansible.builtin.env', 'OS_PROJECT_NAME') }}"
+          user_domain_name: "{{ lookup('ansible.builtin.env', 'OS_USER_DOMAIN_NAME') | default('Default', true) }}"
+          project_domain_name: "{{ lookup('ansible.builtin.env', 'OS_PROJECT_DOMAIN_NAME') | default('Default', true) }}"
+        validate_certs: "{{ lookup('ansible.builtin.env', 'OS_VERIFY') | default('true', true) | bool }}"
+      register: workload_result
+
+    - name: Display workloads found
+      ansible.builtin.debug:
+        msg: "Retrieved {{ workload_result.workloads | length }} workloads successfully."

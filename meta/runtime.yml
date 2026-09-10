@@ -1,0 +1,10 @@
+---
+requires_ansible: '>=2.14.0'
+action_groups:
+  trilio:
+    - workload_info
+    - trilio_workload_info
+plugin_routing:
+  modules:
+    trilio_workload_info:
+      redirect: trilio.trilio_openstack.workload_info
