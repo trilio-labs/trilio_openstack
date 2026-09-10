@@ -45,8 +45,10 @@ To ensure production security:
 ## Prerequisites
 
 ### Controller / Execution Environment Requirements
-* **Ansible**: `ansible-core >= 2.14.0`
-* **Python**: Python 3.9+
+* **Ansible**: `ansible-core >= 2.12.0` (compatible with Ansible 2.9+)
+* **Python**: Python 3.8+
+* **Ansible Collections**:
+  * `openstack.cloud >= 2.1.0` (required for modern `openstacksdk` compatibility and dual-collection workflows)
 * **Python Libraries**:
   * `openstacksdk >= 1.0.0` (standard SDK for OpenStack Ansible)
   * `requests >= 2.25.0`
@@ -55,6 +57,17 @@ To ensure production security:
 Install Python dependencies:
 ```bash
 pip install -r requirements.txt
+```
+
+Install Ansible collection dependencies:
+```bash
+ansible-galaxy collection install -r requirements.yml
+```
+Or upgrade `openstack.cloud` directly via CLI (note the colon `:` when specifying version constraints):
+```bash
+ansible-galaxy collection install openstack.cloud --upgrade
+# Or with explicit version constraint:
+ansible-galaxy collection install "openstack.cloud:>=2.1.0" --upgrade
 ```
 
 ---
@@ -275,9 +288,11 @@ Demonstrates how both collections work together in a single playbook to cross-re
 
 ## Running Tests
 
-Run the unit test suite with `pytest`:
+Run the unit test suite with `pytest` or Python's built-in `unittest`:
 ```bash
 PYTHONPATH=../../.. pytest tests/unit/
+# Or using built-in unittest:
+PYTHONPATH=../../.. python3 -m unittest discover -s tests/unit
 ```
 
 Verify Ansible playbook syntax:

@@ -1,0 +1,5 @@
+---
+# Ansible Collection dependencies for trilio.trilio_openstack
+collections:
+  - name: openstack.cloud
+    version: ">=2.1.0"

@@ -106,6 +106,11 @@ options:
     description:
       - Timeout in seconds for OpenStack SDK API calls.
     type: int
+requirements:
+  - "python >= 3.8"
+  - "openstacksdk >= 1.0.0"
+  - "requests >= 2.25.0"
+  - "keystoneauth1 >= 4.0.0"
 '''
 
 EXAMPLES = r'''
