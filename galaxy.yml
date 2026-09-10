@@ -17,7 +17,7 @@ tags:
   - triliovault
   - workloadmgr
 dependencies:
-  openstack.cloud: ">=2.0.0"
+  openstack.cloud: ">=2.1.0"
 repository: https://github.com/trilio-labs/trilio_openstack
 documentation: https://docs.trilio.io/openstack
 issues: https://github.com/trilio-labs/trilio_openstack/issues
