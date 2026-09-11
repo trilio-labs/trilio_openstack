@@ -1,9 +1,13 @@
 ---
 # Playbook: Create a Trilio Workload Protecting OpenStack Instances
 #
+# Persona & Access:
+# - End-user / tenant operation: regular project members create workloads to protect their VMs.
+# - Tenants choose from available Backup Target Types (BTT) established by cloud administrators.
+#
 # Requirements:
 # - Trilio for OpenStack >= 6.2
-# - Configured Backup Target Type (e.g. primary-nfs-target or s3-cold-storage)
+# - Accessible Backup Target Type (e.g. primary-nfs-target or s3-cold-storage) assigned to project
 #
 # Usage:
 #   ansible-playbook -i localhost playbooks/create_workload.yml

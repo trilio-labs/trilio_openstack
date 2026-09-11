@@ -14,10 +14,15 @@ short_description: Manage Trilio for OpenStack backup workloads
 version_added: "1.1.0"
 description:
   - Create, update, and delete Trilio for OpenStack workloads (protection plans).
+  - Designed for end-user project members / tenant application owners to protect compute instances (VMs).
+  - Tenants select which of the administrator-configured Backup Targets / Backup Target Types (BTT)
+    to store their backups on via C(backup_target_type).
   - Configures instance membership, backup target types (BTT) in accordance with Trilio 6.2+
     Dynamic Mounting Service (DMS), and automated snapshot schedules.
   - Connects to OpenStack using standard OpenStack connection patterns (clouds.yaml, Keystone auth dictionary,
     or environment variables).
+notes:
+  - "Workload management is an end-user / tenant operation. Users must have access to at least one Backup Target Type (BTT) assigned by a cloud administrator."
 author:
   - Kevin Jackson (@uksysadmin)
 options:

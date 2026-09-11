@@ -3,6 +3,7 @@
 #
 # Requirements:
 # - Trilio for OpenStack >= 6.2
+# - OpenStack administrator credentials (admin role required to create backup targets)
 # - NFS share reachable from OpenStack controller and compute nodes
 #
 # Usage:

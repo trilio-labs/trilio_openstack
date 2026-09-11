@@ -33,10 +33,21 @@ Trilio 6.2 introduces a major architectural enhancement: the **Dynamic Mounting 
 In Trilio 6.2+, **plaintext S3 credentials are no longer accepted in API request bodies**. Instead:
 1. S3 access credentials (access key, secret key, endpoint, and bucket) must be stored in the **OpenStack Barbican Key Manager** service.
 2. The resulting Barbican secret URL (`secret_ref`, e.g. `https://barbican:9311/v1/secrets/<uuid>`) is passed to the Trilio API.
-3. DMS securely fetches the credentials from Barbican at mount time.
+3. DMS securely fetches the credentials from Barbican at mount time using the requesting job's Keystone token.
 
-> [!CAUTION]
-> **Zero Credentials in Git/GitHub:** Never commit passwords, tokens, API keys, or raw `clouds.yaml` files containing credentials into source control. Always reference Barbican secrets (`secret_ref`) for S3 storage targets and use Ansible Vault or environment variables for Keystone authentication.
+Rather than requiring manual out-of-band secret creation and URL copying, the included [`playbooks/create_backup_target_s3.yml`](file:///Users/kevinjackson/Trilio/Ansible/ansible_collections/trilio/trilio_openstack/playbooks/create_backup_target_s3.yml) automates this: it prompts for credentials (or reads from Ansible Vault / environment), registers the secret payload in Barbican using standard Ansible OpenStack automation (`openstack.cloud.resource` or CLI), and immediately feeds the resulting `secret_ref` URL to Trilio.
+
+### Role-Based Access Control (RBAC) & Personas
+
+Understanding the separation of responsibilities between cloud administrators and end-users is central to Trilio operations:
+
+| Persona / Role | Permitted Actions | Associated Modules & Playbooks |
+| :--- | :--- | :--- |
+| **Cloud Administrator** (`admin` role) | • Create, modify, and delete NFS and S3 Backup Targets via DMS.<br>• Create Backup Target Types (BTT) and assign project/tenant access.<br>• Manage infrastructure Barbican secrets for S3 backends.<br>• Query targets across the entire cloud (`all_projects: true`). | • `trilio.trilio_openstack.backup_target`<br>• `trilio.trilio_openstack.backup_target_info`<br>• `playbooks/create_backup_target_nfs.yml`<br>• `playbooks/create_backup_target_s3.yml` |
+| **End User / Tenant** (Project Member) | • Create, modify, and delete Workloads (protection plans).<br>• Choose which administrator-configured Backup Target Type (`backup_target_type`) to store backups on.<br>• Query workload details, snapshot history, and status within authorized projects. | • `trilio.trilio_openstack.workload`<br>• `trilio.trilio_openstack.workload_info`<br>• `playbooks/create_workload.yml` |
+
+> [!IMPORTANT]
+> **Backup Target Creation is Admin-Only:** End users cannot create or mount new storage targets (`nfs` or `s3`). Administrators establish targets centrally and expose them to projects via Backup Target Types (BTT). End users then select which BTT to use when creating their workloads.
 
 ---
 
@@ -89,6 +100,8 @@ ansible-galaxy collection install -r requirements.yml
 
 Manages the lifecycle (`state: present | absent`) of Trilio Backup Targets (NFS or S3) and their associated Backup Target Types (BTT) using Trilio 6.2+ Dynamic Mounting Service (DMS) API calls.
 
+> **Access Level:** **Administrator Only (`admin` role)**. Adding, modifying, or deleting storage targets is reserved for cloud administrators.
+
 > **Note:** Also accessible via alias `trilio.trilio_openstack.trilio_backup_target`.
 
 ### Parameter Reference & Variables
@@ -130,6 +143,8 @@ Manages the lifecycle (`state: present | absent`) of Trilio Backup Targets (NFS 
 ## Module Reference: `trilio.trilio_openstack.workload`
 
 Manages the lifecycle (`state: present | absent`) of Trilio backup workloads (protection plans), instance membership, backup target types, and snapshot job schedules.
+
+> **Access Level:** **End User / Tenant (Project Member)**. Application owners create workloads to protect their VMs and choose from available administrator-provisioned Backup Target Types (BTT) via `backup_target_type`.
 
 > **Note:** Also accessible via alias `trilio.trilio_openstack.trilio_workload`.
 
@@ -235,26 +250,39 @@ Registers a new NFS backup target and automatically creates the linked Backup Ta
 ```
 
 ### 2. Register an S3 Backup Target with Barbican Secret (`playbooks/create_backup_target_s3.yml`)
-Registers an S3 bucket using a Barbican `secret_ref`, adhering to the strict zero-credential security rule:
-```yaml
-- name: Register S3 Backup Target in Trilio
-  hosts: localhost
-  gather_facts: false
+Platform engineers do not need to manually construct Barbican JSON payloads or copy/paste raw `secret_ref` URLs. This playbook accepts S3 credentials securely (interactively with hidden typing, via Ansible Vault, environment variables, or `-e`), registers the secret in OpenStack Barbican using native Ansible OpenStack automation (`openstack.cloud.resource` with CLI fallback), and automatically passes the resolved `secret_ref` URL to Trilio:
 
-  tasks:
-    - name: Ensure S3 backup target exists
-      trilio.trilio_openstack.backup_target:
-        cloud: openstack
-        state: present
-        target_type: s3
-        s3_endpoint_url: "https://s3.eu-west-1.amazonaws.com"
-        s3_bucket: "company-openstack-backups"
-        secret_ref: "https://barbican.cloud.local:9311/v1/secrets/d12d4d98-11a2-4fa8-b0a3-95c52c4238e1"
-        btt_name: "s3-cold-storage"
-        immutable: false
-        is_default: false
-      register: s3_target
+```bash
+# Interactive prompt (Access key and hidden Secret key):
+ansible-playbook -i localhost playbooks/create_backup_target_s3.yml
+
+# Non-interactive via environment variables or Ansible Vault:
+export S3_ACCESS_KEY="AKIAIOSFODNN7EXAMPLE"
+export S3_SECRET_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+ansible-playbook -i localhost playbooks/create_backup_target_s3.yml
+
+# Non-interactive via extra-vars:
+ansible-playbook -i localhost playbooks/create_backup_target_s3.yml \
+  -e "s3_access_key=$AWS_ACCESS_KEY_ID s3_secret_key=$AWS_SECRET_ACCESS_KEY"
+
+# Direct mode (using an existing Barbican secret URL directly):
+ansible-playbook -i localhost playbooks/create_backup_target_s3.yml \
+  -e "barbican_secret_ref=https://barbican.cloud.local:9311/v1/secrets/d12d4d98-11a2-4fa8-b0a3-95c52c4238e1"
 ```
+
+#### Playbook S3 & Barbican Variable Reference
+
+| Variable | Type | Default | Source / Description |
+| :--- | :--- | :--- | :--- |
+| `s3_access_key` | `str` | Prompted | S3 Access Key ID. Prompted interactively; falls back to `S3_ACCESS_KEY` or `AWS_ACCESS_KEY_ID`. |
+| `s3_secret_key` | `str` | Prompted (Hidden) | S3 Secret Access Key. Prompted with hidden input (`no_log: true`); falls back to `S3_SECRET_KEY` or `AWS_SECRET_ACCESS_KEY`. |
+| `s3_bucket` | `str` | `company-openstack-backups` | Target S3 bucket name. Configurable via `TRILIO_S3_BUCKET`. |
+| `s3_endpoint` | `str` | `https://s3.eu-west-1.amazonaws.com` | S3 endpoint URL (AWS S3, Ceph RGW, MinIO, Wasabi, etc.). Configurable via `TRILIO_S3_ENDPOINT`. |
+| `btt_name` | `str` | `s3-cold-storage` | Trilio Backup Target Type (BTT) name. Configurable via `TRILIO_S3_BTT_NAME`. |
+| `barbican_secret_name` | `str` | `secret-key-{{ btt_name }}` | Barbican secret name. Configurable via `TRILIO_BARBICAN_SECRET_NAME`. |
+| `barbican_secret_ref` | `str` | `""` | Optional pre-existing Barbican secret URL. If supplied, Barbican secret creation is skipped. Configurable via `TRILIO_BARBICAN_SECRET_REF`. |
+| `s3_ssl` | `bool` | `true` | Whether to enable SSL for S3 communication. |
+| `s3_ssl_verify` | `bool` | `true` | Whether to verify SSL certificates for S3 communication. |
 
 ### 3. Create a Protection Workload (`playbooks/create_workload.yml`)
 Creates an automated daily backup workload protecting compute instances:

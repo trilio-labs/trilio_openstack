@@ -15,12 +15,18 @@ version_added: "1.1.0"
 description:
   - Create, update, and delete Backup Targets (NFS or S3) and their associated Backup Target Types (BTT)
     in Trilio for OpenStack.
+  - Adding or modifying backup targets is reserved for OpenStack users with the C(admin) role.
+    End users / project tenants cannot create backup targets; they consume targets created by administrators
+    by selecting Backup Target Types (BTT) when creating workloads.
   - Requires Trilio version 6.2 or newer, which utilizes the Dynamic Mounting Service (DMS)
     to dynamically manage backup targets via API calls rather than static host mounts.
   - For S3 backup targets, credentials must be stored securely in an OpenStack Barbican secret,
     passing only the C(secret_ref) URL to enforce zero credential leakage into playbooks.
   - Connects to OpenStack using standard OpenStack connection patterns (clouds.yaml, Keystone auth dictionary,
     or environment variables).
+notes:
+  - "Target management is an administrator-only operation requiring OpenStack C(admin) privileges."
+  - "End-users / project tenants should use C(trilio.trilio_openstack.workload) to select from existing Backup Target Types (BTT)."
 author:
   - Kevin Jackson (@uksysadmin)
 options:

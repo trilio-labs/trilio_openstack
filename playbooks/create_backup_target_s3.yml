@@ -1,47 +1,178 @@
 ---
-# Playbook: Register an S3 Backup Target using Trilio 6.2+ DMS and OpenStack Barbican Secret
+# Playbook: Register an S3 Backup Target using Trilio 6.2+ DMS and OpenStack Barbican
 #
-# Security Principle:
-# - In Trilio 6.2+, S3 credentials (access_key, secret_key, endpoint, bucket) must be stored
-#   in OpenStack Barbican Key Manager. The URL reference (secret_ref) is passed to Trilio.
-# - No plaintext AWS/S3 access keys or secret tokens are ever committed to Git or playbooks.
+# Workflow & Security Principles:
+# 1. Administrator Role: Adding backup targets in Trilio is reserved for users with the OpenStack admin role.
+# 2. Accepts S3 access credentials securely (via vars_prompt with hidden secret input,
+#    Ansible Vault, environment variables, or extra-vars).
+# 3. Formats the credential payload matching Trilio 6.2+ DMS requirements.
+# 4. Creates or retrieves the Barbican secret using standard Ansible OpenStack automation
+#    (openstack.cloud.resource key_manager, with resilient fallback to OpenStack CLI).
+# 5. Consumes the resulting Barbican Secret href (secret_ref URL) to register the S3
+#    Backup Target in Trilio via trilio.trilio_openstack.backup_target.
+# 6. Zero-Credential Leakage: Uses no_log: true to prevent sensitive credentials from
+#    appearing in console output, execution logs, or source control.
 #
 # Usage:
+#   # Interactive prompt (access and secret key prompted):
 #   ansible-playbook -i localhost playbooks/create_backup_target_s3.yml
+#
+#   # Non-interactive with extra-vars (e.g. from Ansible Vault or CI runner):
+#   ansible-playbook -i localhost playbooks/create_backup_target_s3.yml \
+#     -e "s3_access_key=$AWS_ACCESS_KEY_ID s3_secret_key=$AWS_SECRET_ACCESS_KEY"
+#
+#   # Non-interactive using existing Barbican secret URL directly:
+#   ansible-playbook -i localhost playbooks/create_backup_target_s3.yml \
+#     -e "barbican_secret_ref=https://barbican:9311/v1/secrets/<uuid>"
 #
 - name: Configure S3 Backup Target with Barbican Secret
   hosts: localhost
   gather_facts: false
 
+  vars_prompt:
+    - name: s3_access_key
+      prompt: "Enter S3 Access Key ID (leave blank to read from S3_ACCESS_KEY/AWS_ACCESS_KEY_ID env var)"
+      private: false
+      default: ""
+
+    - name: s3_secret_key
+      prompt: "Enter S3 Secret Access Key (leave blank to read from S3_SECRET_KEY/AWS_SECRET_ACCESS_KEY env var)"
+      private: true
+      default: ""
+
   vars:
     cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
     s3_endpoint: "{{ lookup('ansible.builtin.env', 'TRILIO_S3_ENDPOINT') | default('https://s3.eu-west-1.amazonaws.com', true) }}"
     s3_bucket: "{{ lookup('ansible.builtin.env', 'TRILIO_S3_BUCKET') | default('company-openstack-backups', true) }}"
-    # The Barbican secret reference URL (created via openstack secret store or terraform)
-    barbican_secret_ref: "{{ lookup('ansible.builtin.env', 'TRILIO_BARBICAN_SECRET_REF') | default('https://barbican.cloud.local:9311/v1/secrets/d12d4d98-11a2-4fa8-b0a3-95c52c4238e1', true) }}"
     btt_name: "{{ lookup('ansible.builtin.env', 'TRILIO_S3_BTT_NAME') | default('s3-cold-storage', true) }}"
+    barbican_secret_name: "{{ lookup('ansible.builtin.env', 'TRILIO_BARBICAN_SECRET_NAME') | default('secret-key-' ~ btt_name, true) }}"
+    # Optional: Pre-existing Barbican secret URL (if supplied, Barbican secret creation is skipped)
+    barbican_secret_ref: "{{ lookup('ansible.builtin.env', 'TRILIO_BARBICAN_SECRET_REF') | default('', true) }}"
+    s3_ssl: true
+    s3_ssl_verify: true
 
   tasks:
-    - name: Create or update S3 Backup Target
+    - name: Resolve effective S3 access credentials
+      ansible.builtin.set_fact:
+        effective_s3_access_key: >-
+          {{ s3_access_key
+             if (s3_access_key | default('')) != ''
+             else (lookup('ansible.builtin.env', 'S3_ACCESS_KEY', default='')
+                   | default(lookup('ansible.builtin.env', 'AWS_ACCESS_KEY_ID', default=''), true)) }}
+        effective_s3_secret_key: >-
+          {{ s3_secret_key
+             if (s3_secret_key | default('')) != ''
+             else (lookup('ansible.builtin.env', 'S3_SECRET_KEY', default='')
+                   | default(lookup('ansible.builtin.env', 'AWS_SECRET_ACCESS_KEY', default=''), true)) }}
+      no_log: true
+      when: barbican_secret_ref == ''
+
+    - name: Validate that S3 credentials are available
+      ansible.builtin.assert:
+        that:
+          - effective_s3_access_key != ''
+          - effective_s3_secret_key != ''
+        fail_msg: >-
+          S3 credentials were not provided. Please specify access and secret keys via interactive
+          prompt, extra-vars (-e s3_access_key=... -e s3_secret_key=...), Ansible Vault, or
+          environment variables (S3_ACCESS_KEY/S3_SECRET_KEY or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY).
+      when: barbican_secret_ref == ''
+
+    - name: Construct S3 Barbican secret payload for Trilio DMS
+      ansible.builtin.set_fact:
+        s3_filesystem_export: >-
+          {{ s3_bucket if ('amazonaws.com' in s3_endpoint or s3_endpoint == '')
+             else ((s3_endpoint | regex_replace('^https?://', '') | regex_replace(':[0-9]+', '') | regex_replace('/.*$', '')) ~ '/' ~ s3_bucket) }}
+        s3_secret_payload:
+          access_key: "{{ effective_s3_access_key }}"
+          secret_key: "{{ effective_s3_secret_key }}"
+          bucket: "{{ s3_bucket }}"
+          endpoint_url: "{{ s3_endpoint if 'amazonaws.com' not in s3_endpoint else '' }}"
+          ssl: "{{ s3_ssl | bool }}"
+          ssl_verify: "{{ s3_ssl_verify | bool }}"
+          filesystem_export: >-
+            {{ s3_bucket if ('amazonaws.com' in s3_endpoint or s3_endpoint == '')
+               else ((s3_endpoint | regex_replace('^https?://', '') | regex_replace(':[0-9]+', '') | regex_replace('/.*$', '')) ~ '/' ~ s3_bucket) }}
+      no_log: true
+      when: barbican_secret_ref == ''
+
+    - name: Create or resolve Barbican secret
+      when: barbican_secret_ref == ''
+      block:
+        - name: 1. Store S3 credentials in Barbican (using openstack.cloud.resource)
+          openstack.cloud.resource:
+            cloud: "{{ cloud_name }}"
+            service: key_manager
+            type: secret
+            attributes:
+              name: "{{ barbican_secret_name }}"
+              payload: "{{ s3_secret_payload | to_json }}"
+              payload_content_type: "text/plain"
+              secret_type: "passphrase"
+          no_log: true
+          register: barbican_res_out
+
+        - name: Extract secret_ref URL from openstack.cloud.resource
+          ansible.builtin.set_fact:
+            target_secret_ref: "{{ barbican_res_out.resource.secret_ref | default(barbican_res_out.resource.id) }}"
+          when: barbican_res_out is defined and barbican_res_out.resource is defined
+
+      rescue:
+        - name: "Fallback: Check if Barbican secret already exists via OpenStack CLI"
+          ansible.builtin.command:
+            cmd: "openstack secret list --name {{ barbican_secret_name }} -f json"
+          environment:
+            OS_CLOUD: "{{ cloud_name }}"
+          register: cli_list_result
+          changed_when: false
+          failed_when: false
+
+        - name: "Fallback: Store S3 credential payload in Barbican via OpenStack CLI"
+          ansible.builtin.command:
+            cmd: >-
+              openstack secret store
+              --name {{ barbican_secret_name }}
+              --payload '{{ s3_secret_payload | to_json }}'
+              -f json
+          environment:
+            OS_CLOUD: "{{ cloud_name }}"
+          no_log: true
+          register: cli_store_result
+          when: (cli_list_result.stdout | default('[]') | from_json | length) == 0
+
+        - name: Extract secret_ref URL from OpenStack CLI
+          ansible.builtin.set_fact:
+            target_secret_ref: >-
+              {{ (cli_list_result.stdout | from_json)[0]['Secret href'] | default((cli_list_result.stdout | from_json)[0].secret_ref)
+                 if ((cli_list_result.stdout | default('[]') | from_json | length) > 0)
+                 else ((cli_store_result.stdout | from_json).secret_ref | default((cli_store_result.stdout | from_json)['Secret href'])) }}
+
+    - name: Set final secret_ref for Trilio
+      ansible.builtin.set_fact:
+        final_secret_ref: "{{ barbican_secret_ref if barbican_secret_ref != '' else target_secret_ref }}"
+
+    - name: Register or update S3 Backup Target in Trilio via DMS
       trilio.trilio_openstack.backup_target:
         cloud: "{{ cloud_name }}"
         state: present
         target_type: s3
         s3_endpoint_url: "{{ s3_endpoint }}"
         s3_bucket: "{{ s3_bucket }}"
-        secret_ref: "{{ barbican_secret_ref }}"
+        secret_ref: "{{ final_secret_ref }}"
         btt_name: "{{ btt_name }}"
         immutable: false
         is_default: false
         metadata:
           tier: "cold-s3"
           managed_by: "ansible"
+          barbican_secret_name: "{{ barbican_secret_name }}"
       register: s3_result
 
-    - name: Display S3 Backup Target details
+    - name: Display S3 Backup Target registration details
       ansible.builtin.debug:
         msg: >-
           S3 Target ID: {{ s3_result.backup_target.id }},
           BTT Name: {{ s3_result.backup_target.btt_name }},
           Bucket: {{ s3_result.backup_target.s3_bucket }},
+          Barbican Secret Ref: {{ final_secret_ref }},
           Status: {{ s3_result.backup_target.status }}
