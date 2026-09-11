@@ -109,14 +109,24 @@
 
     - name: 5. Display backup execution summary
       ansible.builtin.debug:
-        msg:
-          - "============================================================"
-          - "             TRILIO BACKUP SUMMARY                          "
-          - "============================================================"
-          - "Snapshot ID:   {{ backup_result.snapshot.id }}"
-          - "Snapshot Name: {{ backup_result.snapshot.name }}"
-          - "Backup Type:   {{ backup_result.snapshot.snapshot_type | upper }}"
-          - "Status:        {{ backup_result.snapshot.status }}"
-          - "Workload ID:   {{ backup_result.snapshot.workload_id }}"
-          - "Created At:    {{ backup_result.snapshot.created_at | default('Just now') }}"
-          - "============================================================"
+        msg: >-
+          {{
+            [
+              "============================================================",
+              "             TRILIO BACKUP SUMMARY                          ",
+              "============================================================",
+              "Snapshot ID:   " ~ backup_result.snapshot.id,
+              "Snapshot Name: " ~ backup_result.snapshot.name,
+              "Backup Type:   " ~ (backup_result.snapshot.snapshot_type | upper),
+              "Status:        " ~ backup_result.snapshot.status,
+              "Workload ID:   " ~ backup_result.snapshot.workload_id,
+              "Created At:    " ~ (backup_result.snapshot.created_at | default('Just now'))
+            ] + (
+              [
+                "------------------------------------------------------------",
+                "Note: Initial backup for this workload was automatically promoted to a FULL baseline by Trilio. Subsequent backups will be incremental."
+              ] if (resolved_backup_type == 'incremental' and (backup_result.snapshot.snapshot_type | lower) == 'full') else []
+            ) + [
+              "============================================================"
+            ]
+          }}

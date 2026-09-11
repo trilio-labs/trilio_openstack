@@ -235,6 +235,7 @@ Creates and manages on-demand snapshots (backups) of Trilio for OpenStack worklo
 ### Full vs. Incremental Backups
 * **Incremental Backup (Default)**: Captures only data blocks that changed since the previous snapshot. Incremental backups execute rapidly, minimize network and hypervisor overhead, and optimize target storage consumption.
 * **Full Backup**: Creates an independent, complete baseline copy of all protected virtual machine disks and OpenStack metadata. Useful prior to major application upgrades, schema migrations, or OS maintenance.
+* **Automatic Baseline Promotion on First Snapshot**: In TrilioVault / OpenStack data protection architecture, incremental delta chains require a root base copy. If a workload has no existing successful snapshots, Trilio automatically promotes the first backup request to a **Full** baseline snapshot even when incremental is requested. All subsequent backups of that workload will proceed as incremental.
 
 ### Parameter Reference & Variables
 
