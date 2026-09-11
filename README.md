@@ -44,10 +44,10 @@ Understanding the separation of responsibilities between cloud administrators an
 | Persona / Role | Permitted Actions | Associated Modules & Playbooks |
 | :--- | :--- | :--- |
 | **Cloud Administrator** (`admin` role) | • Create, modify, and delete NFS and S3 Backup Targets via DMS.<br>• Create Backup Target Types (BTT) and assign project/tenant access.<br>• Manage infrastructure Barbican secrets for S3 backends.<br>• Query targets across the entire cloud (`all_projects: true`). | • `trilio.trilio_openstack.backup_target`<br>• `trilio.trilio_openstack.backup_target_info`<br>• `playbooks/create_backup_target_nfs.yml`<br>• `playbooks/create_backup_target_s3.yml` |
-| **End User / Tenant** (Project Member) | • Create, modify, and delete Workloads (protection plans).<br>• Choose which administrator-configured Backup Target Type (`backup_target_type`) to store backups on.<br>• Query workload details, snapshot history, and status within authorized projects. | • `trilio.trilio_openstack.workload`<br>• `trilio.trilio_openstack.workload_info`<br>• `playbooks/create_workload.yml` |
+| **End User / Tenant** (Project Member) | • Create, modify, and delete Workloads (protection plans).<br>• Choose which administrator-configured Backup Target Type (`backup_target_type`) to store backups on.<br>• Trigger on-demand full or incremental backups (snapshots) of protected workloads.<br>• Query workload details, snapshot history, and status within authorized projects. | • `trilio.trilio_openstack.workload`<br>• `trilio.trilio_openstack.workload_snapshot`<br>• `trilio.trilio_openstack.workload_info`<br>• `playbooks/create_workload.yml`<br>• `playbooks/backup_workload.yml` |
 
 > [!IMPORTANT]
-> **Backup Target Creation is Admin-Only:** End users cannot create or mount new storage targets (`nfs` or `s3`). Administrators establish targets centrally and expose them to projects via Backup Target Types (BTT). End users then select which BTT to use when creating their workloads.
+> **Backup Target Creation is Admin-Only:** End users cannot create or mount new storage targets (`nfs` or `s3`). Administrators establish targets centrally and expose them to projects via Backup Target Types (BTT). End users then select which BTT to use when creating their workloads and initiating backups.
 
 ---
 
@@ -225,6 +225,80 @@ While the upstream Trilio Workloadmgr REST API historically only exposed `nfs_sh
 
 ---
 
+## Module Reference: `trilio.trilio_openstack.workload_snapshot`
+
+> **Access Level:** End User / Tenant (Project Member) or Cloud Administrator  
+> **Alias:** Also accessible via alias `trilio.trilio_openstack.trilio_workload_snapshot`.
+
+Creates and manages on-demand snapshots (backups) of Trilio for OpenStack workloads. Allows project members to initiate immediate incremental (default) or full backups of their protected workloads without waiting for scheduled job intervals.
+
+### Full vs. Incremental Backups
+* **Incremental Backup (Default)**: Captures only data blocks that changed since the previous snapshot. Incremental backups execute rapidly, minimize network and hypervisor overhead, and optimize target storage consumption.
+* **Full Backup**: Creates an independent, complete baseline copy of all protected virtual machine disks and OpenStack metadata. Useful prior to major application upgrades, schema migrations, or OS maintenance.
+
+### Parameter Reference & Variables
+
+| Variable / Parameter | Type | Default | Choices / Aliases | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `cloud` | `raw` | `None` | | Name of the cloud in `clouds.yaml`. |
+| `auth` | `dict` | `None` | `no_log: true` | Keystone authentication dictionary. |
+| `state` | `str` | `present` | `present`, `absent` | Desired state. `present` creates a backup; `absent` deletes an existing snapshot. |
+| `workload` | `str` | `None` | aliases: `workload_id`, `id` | Name or UUID of the workload to back up. If a name is supplied, the module automatically resolves its UUID. |
+| `workload_name` | `str` | `None` | | Explicit workload display name to resolve and back up. |
+| `snapshot_type` | `str` | `incremental` | `incremental`, `full`<br>alias: `type` | Type of backup to perform. Default is `incremental`. |
+| `full` | `bool` | `None` | | Boolean convenience flag. Setting `full: true` forces a full backup, overriding `snapshot_type`. |
+| `name` | `str` | `None` | alias: `snapshot_name` | Display name for the snapshot. Defaults to `<workload_name> - <Type> Backup` if omitted. |
+| `description` | `str` | `None` | alias: `snapshot_description` | Detailed description explaining the purpose of this snapshot. |
+| `wait` | `bool` | `false` | | Whether to wait synchronously until the snapshot operation completes and reaches `available` status. |
+| `timeout` | `int` | `600` | | Maximum timeout in seconds to wait for snapshot completion when `wait: true`. |
+| `poll_interval` | `int` | `10` | | Polling interval in seconds between status checks when `wait: true`. |
+| `snapshot_id` | `str` | `None` | | UUID of an existing snapshot to delete when `state=absent`. |
+| `project_id` | `str` | `None` | | Target OpenStack project UUID. Defaults to the authenticated project. |
+
+### Return Values
+
+| Return Key | Type | Description |
+| :--- | :--- | :--- |
+| `snapshot.id` | `str` | Unique UUID of the created snapshot. |
+| `snapshot.name` | `str` | Display name of the snapshot. |
+| `snapshot.snapshot_type` | `str` | Type of backup (`incremental` or `full`). |
+| `snapshot.status` | `str` | Snapshot status (e.g. `executing`, `available`, `error`). |
+| `snapshot.workload_id` | `str` | UUID of the parent workload. |
+| `snapshot.created_at` | `str` | ISO 8601 timestamp when the snapshot was initiated. |
+| `snapshot.size` | `int` | Total backup size in bytes (populated once status reaches `available`). |
+
+### Task Examples
+
+```yaml
+# 1. Trigger an on-demand incremental backup (default)
+- name: Take incremental backup of web cluster
+  trilio.trilio_openstack.workload_snapshot:
+    cloud: openstack
+    workload: production-web-cluster
+    snapshot_type: incremental
+    description: "Daily pre-batch job incremental backup"
+
+# 2. Trigger an on-demand full backup and wait synchronously for completion
+- name: Take full backup and wait until available
+  trilio.trilio_openstack.workload_snapshot:
+    cloud: openstack
+    workload: "7b47b4e8-8db9-4670-8b1e-0679815049cf"
+    snapshot_type: full
+    name: "Pre-Maintenance Full Baseline"
+    description: "Full snapshot prior to kernel patch application"
+    wait: true
+    timeout: 1800
+
+# 3. Delete an obsolete snapshot
+- name: Delete snapshot by ID
+  trilio.trilio_openstack.workload_snapshot:
+    cloud: openstack
+    state: absent
+    snapshot_id: "3c9b7402-45e9-40ea-a059-45e0d7c71d64"
+```
+
+---
+
 ## Playbook Workflows & Examples
 
 All example playbooks reside in the [`playbooks/`](playbooks/) directory:
@@ -346,6 +420,89 @@ Combines `openstack.cloud.server_info`, `trilio.trilio_openstack.backup_target`,
           interval: "24 hr"
           retention_policy_type: "Number of Snapshots to Keep"
           retention_policy_value: "14"
+```
+
+### 5. On-Demand Workload Backup (`playbooks/backup_workload.yml`)
+Performs on-demand backups (snapshots) of a selected workload. Designed for both interactive human operation and automated execution in CI/CD pipelines or cron jobs.
+
+#### Key Features & Defaults
+* **Incremental by Default**: Captures only modified blocks since the previous snapshot, preserving storage and completing quickly.
+* **Full Backup Option**: Creates an independent complete baseline snapshot when `backup_type: full` is specified.
+* **Interactive Prompting (`vars_prompt`)**: If executed without extra variables in an interactive terminal, prompts for the workload name/UUID and backup type (defaulting to incremental).
+* **Scriptable / Headless**: Passing `-e target_workload=...` or environment variables automatically bypasses interactive prompts for non-blocking automation.
+* **Synchronous or Asynchronous**: By default, triggers the backup task asynchronously and returns immediately (`wait_for_completion: false`). Set `wait_for_completion: true` to block until the snapshot status reaches `available`.
+
+#### Variable Reference & Documentation
+
+| Variable Name | Source / Aliases | Type | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `target_workload` | `workload`, `workload_name`, `workload_id`, `WORKLOAD_NAME`, `WORKLOAD_ID` | `str` | *Interactive prompt* | Name or UUID of the workload to back up. Automatically resolved to UUID if provided as a name. |
+| `backup_type` | `snapshot_type`, `BACKUP_TYPE` | `str` | `incremental` | Backup strategy: `incremental` (default, changed blocks only) or `full` (complete disk baseline). |
+| `backup_name` | `snapshot_name`, `BACKUP_NAME` | `str` | `<workload> - <Type> Backup` | Custom display name for the generated snapshot. |
+| `backup_description` | `snapshot_description`, `BACKUP_DESCRIPTION` | `str` | `On-demand backup triggered via Ansible` | Textual description explaining the reason for the backup. |
+| `wait_for_completion` | `wait`, `WAIT_FOR_COMPLETION` | `bool` | `false` | When `true`, blocks and polls status until the snapshot reaches `available`. When `false`, returns immediately after execution is scheduled. |
+| `wait_timeout` | `timeout`, `WAIT_TIMEOUT` | `int` | `600` | Maximum wait timeout in seconds when `wait_for_completion=true`. |
+| `cloud_name` | `OS_CLOUD` | `str` | `openstack` | Named cloud entry in `clouds.yaml`. |
+
+#### CLI Usage Examples
+
+```bash
+# 1. Interactive prompt (prompts for workload, defaults to incremental):
+ansible-playbook playbooks/backup_workload.yml
+
+# 2. Non-interactive incremental backup (default):
+ansible-playbook playbooks/backup_workload.yml \
+  -e target_workload=production-web-cluster
+
+# 3. Non-interactive full backup with synchronous wait:
+ansible-playbook playbooks/backup_workload.yml \
+  -e target_workload=production-web-cluster \
+  -e backup_type=full \
+  -e wait_for_completion=true \
+  -e wait_timeout=1200
+
+# 4. Non-interactive via environment variables:
+export OS_CLOUD=openstack
+export WORKLOAD_NAME=production-web-cluster
+export BACKUP_TYPE=full
+export WAIT_FOR_COMPLETION=true
+ansible-playbook playbooks/backup_workload.yml
+```
+
+---
+
+## Executing Playbooks in Standalone / Copied Environments
+
+If you copy the example playbooks to a standalone directory (e.g. `/vagrant/tvo/ansible/playbooks` or a central deployment repo) and encounter:
+```text
+ERROR! couldn't resolve module/action 'trilio.trilio_openstack.workload_snapshot'.
+This often indicates a misspelling, missing collection, or incorrect module path.
+```
+
+This occurs because Ansible cannot locate the `trilio.trilio_openstack` collection in standard system paths. Resolve this using any of the following standard methods:
+
+### Option A: Install the Collection into the User / System Path (Recommended)
+Build and install the collection using `ansible-galaxy`:
+```bash
+# From the collection root directory:
+ansible-galaxy collection build --force
+ansible-galaxy collection install trilio-trilio_openstack-*.tar.gz
+```
+This installs the collection to `~/.ansible/collections/ansible_collections/trilio/trilio_openstack`, making all modules globally resolvable by any playbook on that machine.
+
+### Option B: Set `ANSIBLE_COLLECTIONS_PATH`
+Point Ansible to the directory containing `ansible_collections/`:
+```bash
+export ANSIBLE_COLLECTIONS_PATH=/path/to/collection_parent:~/.ansible/collections:/usr/share/ansible/collections
+ansible-playbook playbooks/backup_workload.yml
+```
+
+### Option C: Configure `ansible.cfg`
+Place an `ansible.cfg` in your working playbook directory:
+```ini
+[defaults]
+collections_path = /path/to/ansible_collections:~/.ansible/collections
+host_key_checking = False
 ```
 
 ---

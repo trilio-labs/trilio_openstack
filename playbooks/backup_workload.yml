@@ -1,0 +1,129 @@
+---
+# Playbook: Backup a Selected Trilio Workload (Incremental or Full)
+#
+# Persona & Access:
+# - End-user / Tenant operation: Project members trigger on-demand backups (snapshots)
+#   of their protected workloads.
+# - Cloud administrators can also trigger backups on behalf of any project.
+#
+# Execution Modes:
+# 1. Interactive Execution (vars_prompt):
+#    Prompts for the target workload and backup type.
+#    Default backup type is 'incremental'.
+# 2. Automated / CI/CD Execution:
+#    Provide variables via extra vars (-e target_workload=... -e backup_type=...)
+#    or environment variables (WORKLOAD_NAME, BACKUP_TYPE).
+#    Passing extra vars automatically bypasses the interactive prompt.
+#
+# Collection Resolution Note:
+#   If executing this playbook outside the collection repository root, ensure
+#   the collection is installed (e.g. `ansible-galaxy collection install ...`)
+#   or export ANSIBLE_COLLECTIONS_PATH pointing to the collection parent directory.
+#
+# Usage Examples:
+#   # Interactive (prompts for workload, defaults to incremental):
+#   ansible-playbook playbooks/backup_workload.yml
+#
+#   # Non-interactive incremental backup (default):
+#   ansible-playbook playbooks/backup_workload.yml -e target_workload=production-web-cluster
+#
+#   # Non-interactive full backup with synchronous wait:
+#   ansible-playbook playbooks/backup_workload.yml \
+#     -e target_workload=production-web-cluster \
+#     -e backup_type=full \
+#     -e wait_for_completion=true
+#
+- name: Perform Trilio Workload Backup
+  hosts: localhost
+  gather_facts: false
+
+  vars_prompt:
+    - name: target_workload
+      prompt: "Enter Workload Name or UUID to back up"
+      private: false
+      default: "{{ lookup('ansible.builtin.env', 'WORKLOAD_NAME') | default(lookup('ansible.builtin.env', 'WORKLOAD_ID', default=''), true) }}"
+
+    - name: backup_type
+      prompt: "Select backup type ('incremental' or 'full')"
+      private: false
+      default: "incremental"
+
+  vars:
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
+
+    # Workload identifier can come from CLI (-e target_workload=... or -e workload=...), env var, or prompt
+    resolved_workload: >-
+      {{
+        workload | default(
+          workload_name | default(
+            workload_id | default(target_workload, true),
+            true
+          ),
+          true
+        ) | trim
+      }}
+
+    # Backup type: incremental or full (default: incremental)
+    resolved_backup_type: >-
+      {{
+        (snapshot_type | default(backup_type, true) | default('incremental', true)) | lower | trim
+      }}
+
+    # Optional snapshot display name and description
+    custom_snapshot_name: "{{ snapshot_name | default(backup_name | default(lookup('ansible.builtin.env', 'BACKUP_NAME', default=''), true), true) | default(omit, true) }}"
+    custom_snapshot_description: "{{ snapshot_description | default(backup_description | default(lookup('ansible.builtin.env', 'BACKUP_DESCRIPTION', default='On-demand backup triggered via Ansible'), true), true) }}"
+
+    # Wait for completion (default: false for asynchronous execution, true for synchronous blocking)
+    wait_for_completion: "{{ (wait | default(lookup('ansible.builtin.env', 'WAIT_FOR_COMPLETION', default=false))) | bool }}"
+    wait_timeout: "{{ (timeout | default(lookup('ansible.builtin.env', 'WAIT_TIMEOUT', default=600))) | int }}"
+
+  tasks:
+    - name: 1. Validate required inputs
+      ansible.builtin.assert:
+        that:
+          - resolved_workload | length > 0
+          - resolved_backup_type in ['incremental', 'full']
+        fail_msg: >-
+          Validation failed: A valid workload name or UUID is required, and backup_type
+          must be either 'incremental' or 'full' (received workload='{{ resolved_workload }}',
+          backup_type='{{ resolved_backup_type }}').
+
+    - name: 2. Query workload details before backup
+      trilio.trilio_openstack.workload_info:
+        cloud: "{{ cloud_name }}"
+        name: "{{ resolved_workload }}"
+      register: wl_query
+      ignore_errors: true
+
+    - name: 3. Display target workload overview
+      ansible.builtin.debug:
+        msg:
+          - "Target Workload: {{ resolved_workload }}"
+          - "Backup Type:    {{ resolved_backup_type | upper }}"
+          - "Synchronous:    {{ wait_for_completion }}"
+          - "Workload Found: {{ 'Yes (' + wl_query.workloads[0].id + ')' if (wl_query.workloads is defined and wl_query.workloads | length > 0) else 'Will resolve by ID/API' }}"
+
+    - name: 4. Trigger on-demand workload backup
+      trilio.trilio_openstack.workload_snapshot:
+        cloud: "{{ cloud_name }}"
+        workload: "{{ resolved_workload }}"
+        snapshot_type: "{{ resolved_backup_type }}"
+        name: "{{ custom_snapshot_name | default(omit) }}"
+        description: "{{ custom_snapshot_description }}"
+        wait: "{{ wait_for_completion }}"
+        timeout: "{{ wait_timeout }}"
+      register: backup_result
+
+    - name: 5. Display backup execution summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "             TRILIO BACKUP SUMMARY                          "
+          - "============================================================"
+          - "Snapshot ID:   {{ backup_result.snapshot.id }}"
+          - "Snapshot Name: {{ backup_result.snapshot.name }}"
+          - "Backup Type:   {{ backup_result.snapshot.snapshot_type | upper }}"
+          - "Status:        {{ backup_result.snapshot.status }}"
+          - "Workload ID:   {{ backup_result.snapshot.workload_id }}"
+          - "Created At:    {{ backup_result.snapshot.created_at | default('Just now') }}"
+          - "============================================================"

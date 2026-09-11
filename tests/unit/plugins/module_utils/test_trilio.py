@@ -272,7 +272,68 @@ class TestTrilioModuleUtils(unittest.TestCase):
                         }
                     })
 
+    def test_create_snapshot_incremental(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            mock_snap = {'id': 'snap-1', 'status': 'executing', 'snapshot_type': 'incremental'}
+            with patch.object(client, 'post', return_value={'snapshot': mock_snap}) as mock_post:
+                res = client.create_snapshot('wl-123', name='Incremental Test', description='Test inc', full=False)
+                self.assertEqual(res['id'], 'snap-1')
+                mock_post.assert_called_once_with(
+                    '/v1/proj-123/workloads/wl-123',
+                    json_data={'snapshot': {'name': 'Incremental Test', 'description': 'Test inc'}},
+                    params={}
+                )
+
+    def test_create_snapshot_full(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            mock_snap = {'id': 'snap-2', 'status': 'executing', 'snapshot_type': 'full'}
+            with patch.object(client, 'post', return_value={'snapshot': mock_snap}) as mock_post:
+                res = client.create_snapshot('wl-123', name='Full Test', description='Test full', full=True)
+                self.assertEqual(res['id'], 'snap-2')
+                mock_post.assert_called_once_with(
+                    '/v1/proj-123/workloads/wl-123',
+                    json_data={'snapshot': {'name': 'Full Test', 'description': 'Test full'}},
+                    params={'full': 'True'}
+                )
+
+    def test_delete_snapshot(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            with patch.object(client, 'delete', return_value={'message': 'deleted'}) as mock_del:
+                client.delete_snapshot('snap-del-123')
+                mock_del.assert_called_once_with('/v1/proj-123/snapshots/snap-del-123')
+
+    def test_wait_for_snapshot(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            with patch.object(client, 'get_snapshot', side_effect=[
+                {'id': 'snap-1', 'status': 'executing'},
+                {'id': 'snap-1', 'status': 'available'}
+            ]):
+                with patch('time.sleep', return_value=None):
+                    res = client.wait_for_snapshot('snap-1', target_status='available', timeout=10, poll_interval=1)
+                    self.assertEqual(res['status'], 'available')
+
 
 if __name__ == '__main__':
     unittest.main()
+
 

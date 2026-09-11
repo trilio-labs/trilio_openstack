@@ -588,14 +588,14 @@ class TrilioClient:
     def get(self, path, params=None):
         return self.request('GET', path, params=params)
 
-    def post(self, path, json_data=None):
-        return self.request('POST', path, json_data=json_data)
+    def post(self, path, json_data=None, params=None):
+        return self.request('POST', path, json_data=json_data, params=params)
 
-    def put(self, path, json_data=None):
-        return self.request('PUT', path, json_data=json_data)
+    def put(self, path, json_data=None, params=None):
+        return self.request('PUT', path, json_data=json_data, params=params)
 
-    def delete(self, path):
-        return self.request('DELETE', path)
+    def delete(self, path, params=None):
+        return self.request('DELETE', path, params=params)
 
     # -------------------------------------------------------------------------
     # DMS (Dynamic Mounting Service) & Version Validation
@@ -1099,4 +1099,124 @@ class TrilioClient:
             subpath += '?database_only=True'
 
         return self.delete(subpath)
+
+    def create_snapshot(self, workload_id, name=None, description=None, full=False, project_id=None):
+        """
+        Create a snapshot (backup) of a workload (POST /v1/{project_id}/workloads/{workload_id}).
+        Query param 'full=True' is sent for full backups, omitted or 'full=False' for incremental.
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/workloads/%s' % workload_id
+        else:
+            subpath = '/v1/%s/workloads/%s' % (target_project, workload_id)
+
+        params = {}
+        if full:
+            params['full'] = 'True'
+
+        snap_data = {}
+        if name:
+            snap_data['name'] = name
+        if description:
+            snap_data['description'] = description
+        if not snap_data:
+            snap_data['name'] = 'Snapshot for %s' % workload_id
+
+        payload = {'snapshot': snap_data}
+        res = self.post(subpath, json_data=payload, params=params)
+        if isinstance(res, dict) and 'snapshot' in res:
+            return res['snapshot']
+        return res
+
+    def get_snapshot(self, snapshot_id, project_id=None):
+        """
+        Retrieve a single snapshot by UUID (GET /v1/{project_id}/snapshots/{snapshot_id}).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/snapshots/%s' % snapshot_id
+        else:
+            subpath = '/v1/%s/snapshots/%s' % (target_project, snapshot_id)
+
+        res = self.get(subpath)
+        if isinstance(res, dict) and 'snapshot' in res:
+            return res['snapshot']
+        return res
+
+    def list_snapshots(self, workload_id=None, project_id=None, all_snapshots=False):
+        """
+        List snapshots (GET /v1/{project_id}/snapshots).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/snapshots'
+        else:
+            subpath = '/v1/%s/snapshots' % target_project
+
+        params = {}
+        if workload_id:
+            params['workload_id'] = workload_id
+        if all_snapshots:
+            params['all'] = 'True'
+
+        res = self.get(subpath, params=params)
+        if isinstance(res, dict) and 'snapshots' in res:
+            return res['snapshots']
+        elif isinstance(res, list):
+            return res
+        return []
+
+    def wait_for_snapshot(self, snapshot_id, target_status='available', timeout=600, poll_interval=10, project_id=None):
+        """
+        Wait for a snapshot to reach a target status (default: 'available').
+        """
+        import time
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            snap = self.get_snapshot(snapshot_id, project_id=project_id)
+            status = snap.get('status', '').lower() if isinstance(snap, dict) else ''
+            if status == target_status.lower():
+                return snap
+            elif status in ('error', 'failed'):
+                error_msg = snap.get('error_msg') or snap.get('status_description') or 'Snapshot entered error state'
+                self.module.fail_json(
+                    msg="Snapshot '%s' failed with status '%s': %s" % (snapshot_id, status, error_msg),
+                    snapshot=snap
+                )
+            time.sleep(poll_interval)
+
+        self.module.fail_json(
+            msg="Timeout waiting for snapshot '%s' to reach status '%s' after %d seconds." % (snapshot_id, target_status, timeout)
+        )
+
+    def delete_snapshot(self, snapshot_id, project_id=None):
+        """
+        Delete a snapshot by UUID (DELETE /v1/{project_id}/snapshots/{snapshot_id}).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/snapshots/%s' % snapshot_id
+        else:
+            subpath = '/v1/%s/snapshots/%s' % (target_project, snapshot_id)
+
+        return self.delete(subpath)
+
+
 
