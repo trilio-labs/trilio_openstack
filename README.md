@@ -454,20 +454,40 @@ ansible-playbook playbooks/backup_workload.yml
 ansible-playbook playbooks/backup_workload.yml \
   -e target_workload=production-web-cluster
 
-# 3. Non-interactive full backup with synchronous wait:
+# 3. Workloads with spaces in the friendly name:
+# Note: In bash/zsh, quote nested quotes so Ansible receives the full string with spaces
 ansible-playbook playbooks/backup_workload.yml \
-  -e target_workload=production-web-cluster \
+  -e 'target_workload="Production Workloads"' \
+  -e backup_type=incremental \
+  -e wait_for_completion=true
+
+# Or use Ansible's JSON extra-vars format:
+ansible-playbook playbooks/backup_workload.yml \
+  -e '{"target_workload": "Production Workloads", "backup_type": "full", "wait_for_completion": true}'
+
+# 4. Non-interactive full backup with synchronous wait:
+ansible-playbook playbooks/backup_workload.yml \
+  -e 'target_workload="Production Workloads"' \
   -e backup_type=full \
   -e wait_for_completion=true \
   -e wait_timeout=1200
 
-# 4. Non-interactive via environment variables:
+# 5. Non-interactive via environment variables (cleanest for names with spaces):
 export OS_CLOUD=openstack
-export WORKLOAD_NAME=production-web-cluster
-export BACKUP_TYPE=full
+export WORKLOAD_NAME="Production Workloads"
+export BACKUP_TYPE=incremental
 export WAIT_FOR_COMPLETION=true
 ansible-playbook playbooks/backup_workload.yml
 ```
+
+> [!TIP]
+> **Workload Names with Spaces on the CLI:**
+> In bash and zsh, running `-e target_workload="Production Workloads"` causes the shell to strip the outer quotes before Ansible receives the arguments, resulting in `target_workload=Production Workloads`. Ansible's key-value parser treats the space as a delimiter, truncating the variable value to `"Production"`.
+> To preserve spaces, either:
+> 1. Use single quotes around double quotes: `-e 'target_workload="Production Workloads"'`
+> 2. Use JSON format: `-e '{"target_workload": "Production Workloads"}'`
+> 3. Use an environment variable: `export WORKLOAD_NAME="Production Workloads"`
+> 4. Run interactively and type the name at the prompt: `Enter Workload Name or UUID to back up []: Production Workloads`
 
 ---
 

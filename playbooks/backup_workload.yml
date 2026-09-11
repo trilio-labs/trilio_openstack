@@ -27,9 +27,14 @@
 #   # Non-interactive incremental backup (default):
 #   ansible-playbook playbooks/backup_workload.yml -e target_workload=production-web-cluster
 #
+#   # Workloads with spaces in the name (quote nested for shell/ansible):
+#   ansible-playbook playbooks/backup_workload.yml -e 'target_workload="Production Workloads"'
+#   # or using JSON format:
+#   ansible-playbook playbooks/backup_workload.yml -e '{"target_workload": "Production Workloads"}'
+#
 #   # Non-interactive full backup with synchronous wait:
 #   ansible-playbook playbooks/backup_workload.yml \
-#     -e target_workload=production-web-cluster \
+#     -e 'target_workload="Production Workloads"' \
 #     -e backup_type=full \
 #     -e wait_for_completion=true
 #
@@ -52,22 +57,10 @@
     cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
 
     # Workload identifier can come from CLI (-e target_workload=... or -e workload=...), env var, or prompt
-    resolved_workload: >-
-      {{
-        workload | default(
-          workload_name | default(
-            workload_id | default(target_workload, true),
-            true
-          ),
-          true
-        ) | trim
-      }}
+    resolved_workload: "{{ workload | default(workload_name | default(workload_id | default(target_workload, true), true), true) | trim }}"
 
     # Backup type: incremental or full (default: incremental)
-    resolved_backup_type: >-
-      {{
-        (snapshot_type | default(backup_type, true) | default('incremental', true)) | lower | trim
-      }}
+    resolved_backup_type: "{{ (snapshot_type | default(backup_type, true) | default('incremental', true)) | lower | trim }}"
 
     # Optional snapshot display name and description
     custom_snapshot_name: "{{ snapshot_name | default(backup_name | default(lookup('ansible.builtin.env', 'BACKUP_NAME', default=''), true), true) | default(omit, true) }}"
