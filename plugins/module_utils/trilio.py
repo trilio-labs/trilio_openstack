@@ -456,25 +456,21 @@ class TrilioClient:
             url = url.replace('%(tenant_id)s', self.project_id)
         return url
 
-    def request(self, method, path, params=None, json_data=None):
+    @property
+    def base_endpoint(self):
         """
-        Executes an authenticated HTTP request to Trilio wlm-api.
+        Returns the root/base URL of the Trilio service without /v1 or project_id suffix.
+        E.g. http://tvm.domain:8780/v1/UUID -> http://tvm.domain:8780
         """
         if not self.endpoint:
-            self.module.fail_json(msg="Trilio endpoint is not configured.")
+            return None
+        base = re.sub(r'/v1(/[0-9a-fA-F-]{32,36})?/?$', '', self.endpoint)
+        return base.rstrip('/')
 
-        # Ensure path begins with /
-        if not path.startswith('/'):
-            path = '/' + path
-
-        # Construct full URL.
-        # If endpoint already has /v1 or /v1/{project_id}, avoid duplicating
-        if path.startswith('/v1') and '/v1' in self.endpoint:
-            # Strip /v1 from path if endpoint already contains /v1
-            path = path[3:]
-
-        full_url = self.endpoint + path
-
+    def _execute_http(self, method, full_url, params=None, json_data=None, allow_404=True):
+        """
+        Low-level HTTP execution with token authentication and error mapping.
+        """
         headers = {
             'X-Auth-Token': self.token,
             'Accept': 'application/json',
@@ -521,7 +517,11 @@ class TrilioClient:
                 msg="Forbidden (HTTP 403): User lacks permissions for Trilio Workload Manager API."
             )
         elif resp.status_code == 404:
-            return None
+            if allow_404:
+                return None
+            self.module.fail_json(
+                msg="Resource not found (HTTP 404) at %s: %s" % (full_url, resp.text)
+            )
         elif resp.status_code >= 400:
             self.module.fail_json(
                 msg="Trilio API request error (HTTP %s): %s" % (resp.status_code, resp.text)
@@ -535,6 +535,56 @@ class TrilioClient:
         except Exception:
             return resp.text
 
+    def request(self, method, path, params=None, json_data=None, allow_404=True):
+        """
+        Executes an authenticated HTTP request to Trilio wlm-api.
+        Path is relative to self.endpoint (project-scoped or service endpoint).
+        """
+        if not self.endpoint:
+            self.module.fail_json(msg="Trilio endpoint is not configured.")
+
+        # Ensure path begins with /
+        if not path.startswith('/'):
+            path = '/' + path
+
+        # Construct full URL.
+        # If endpoint already has /v1 or /v1/{project_id}, avoid duplicating
+        if path.startswith('/v1') and '/v1' in self.endpoint:
+            path = path[3:]
+
+        full_url = self.endpoint + path
+        return self._execute_http(method, full_url, params=params, json_data=json_data, allow_404=allow_404)
+
+    def dms_request(self, method, path, params=None, json_data=None, allow_404=True):
+        """
+        Executes an authenticated HTTP request against Dynamic Mounting Service (DMS) endpoints
+        such as /backup_targets and /backup_target_types.
+        Resolves to base_endpoint or endpoint with fallback handling.
+        """
+        if not self.endpoint:
+            self.module.fail_json(msg="Trilio endpoint is not configured.")
+
+        if not path.startswith('/'):
+            path = '/' + path
+
+        base = self.base_endpoint or self.endpoint
+        full_url = base + path
+
+        res = self._execute_http(method, full_url, params=params, json_data=json_data, allow_404=True)
+        if res is None:
+            # If 404, check with /v1 prefix if not already present
+            if not path.startswith('/v1'):
+                v1_url = base + '/v1' + path
+                res_v1 = self._execute_http(method, v1_url, params=params, json_data=json_data, allow_404=True)
+                if res_v1 is not None:
+                    return res_v1
+
+            if not allow_404:
+                self.module.fail_json(msg="DMS resource not found (HTTP 404) at %s" % full_url)
+            return None
+
+        return res
+
     def get(self, path, params=None):
         return self.request('GET', path, params=params)
 
@@ -547,6 +597,260 @@ class TrilioClient:
     def delete(self, path):
         return self.request('DELETE', path)
 
+    # -------------------------------------------------------------------------
+    # DMS (Dynamic Mounting Service) & Version Validation
+    # -------------------------------------------------------------------------
+
+    def validate_dms_support(self, min_version="6.2"):
+        """
+        Validates that the connected Trilio instance supports the Dynamic Mounting Service (DMS)
+        API and is version 6.2 or newer.
+        If DMS endpoints are not found or return 404, fails with an informative error.
+        """
+        res = self.dms_request('GET', '/backup_targets')
+        if res is None:
+            self.module.fail_json(
+                msg=(
+                    "Trilio %s or newer is required to manage backup targets and backup target types "
+                    "using the Dynamic Mounting Service (DMS) API. The '/backup_targets' endpoint was "
+                    "not found on Trilio endpoint '%s'. Earlier Trilio versions (4.x/5.x/6.0/6.1) used "
+                    "static container mounts and do not support dynamic API-driven target creation."
+                    % (min_version, self.endpoint or self.base_endpoint)
+                )
+            )
+        return True
+
+    # -------------------------------------------------------------------------
+    # Backup Target Operations (Trilio 6.2+ DMS)
+    # -------------------------------------------------------------------------
+
+    def list_backup_targets(self):
+        """
+        List all backup targets configured in Trilio via DMS.
+        GET /backup_targets
+        """
+        res = self.dms_request('GET', '/backup_targets')
+        if isinstance(res, dict) and 'backup_targets' in res:
+            return res['backup_targets']
+        elif isinstance(res, list):
+            return res
+        return []
+
+    def get_backup_target(self, backup_target_id):
+        """
+        Retrieve a single backup target by UUID.
+        GET /backup_targets/{id}
+        """
+        res = self.dms_request('GET', '/backup_targets/%s' % backup_target_id)
+        if isinstance(res, dict) and 'backup_target' in res:
+            return res['backup_target']
+        return res
+
+    def find_backup_target(self, name=None, btt_name=None, filesystem_export=None,
+                           s3_endpoint_url=None, s3_bucket=None, target_id=None):
+        """
+        Find an existing backup target matching search criteria.
+        """
+        targets = self.list_backup_targets()
+        for bt in targets:
+            if target_id and bt.get('id') == target_id:
+                return bt
+            if filesystem_export and bt.get('filesystem_export') == filesystem_export:
+                return bt
+            if s3_endpoint_url and s3_bucket:
+                if bt.get('s3_endpoint_url') == s3_endpoint_url and bt.get('s3_bucket') == s3_bucket:
+                    return bt
+            if name and (bt.get('name') == name or bt.get('btt_name') == name):
+                return bt
+            if btt_name and bt.get('btt_name') == btt_name:
+                return bt
+        return None
+
+    def create_backup_target(self, target_type, filesystem_export=None, nfs_mount_opts=None,
+                             s3_endpoint_url=None, s3_bucket=None, secret_ref=None,
+                             btt_name=None, is_default=0, immutable=0, metadata=None):
+        """
+        Create a backup target using Trilio 6.2+ DMS API.
+        POST /backup_targets
+        """
+        target_data = {
+            'type': target_type,
+            'is_default': 1 if is_default else 0,
+        }
+        if btt_name:
+            target_data['btt_name'] = btt_name
+
+        if target_type == 'nfs':
+            if not filesystem_export:
+                self.module.fail_json(msg="'filesystem_export' is required when backup target type is 'nfs'.")
+            target_data['filesystem_export'] = filesystem_export
+            if nfs_mount_opts:
+                target_data['nfs_mount_opts'] = nfs_mount_opts
+
+        elif target_type == 's3':
+            if not s3_endpoint_url or not s3_bucket:
+                self.module.fail_json(msg="'s3_endpoint_url' and 's3_bucket' are required when backup target type is 's3'.")
+            if not secret_ref:
+                self.module.fail_json(
+                    msg="'secret_ref' (Barbican secret URL) is required for S3 backup targets in Trilio 6.2+ DMS."
+                )
+            target_data['s3_endpoint_url'] = s3_endpoint_url
+            target_data['s3_bucket'] = s3_bucket
+            target_data['secret_ref'] = secret_ref
+            if immutable:
+                target_data['immutable'] = 1 if immutable else 0
+
+        if metadata:
+            target_data['metadata'] = metadata
+
+        payload = {'backup_target': target_data}
+        res = self.dms_request('POST', '/backup_targets', json_data=payload)
+        if isinstance(res, dict) and 'backup_target' in res:
+            return res['backup_target']
+        return res
+
+    def update_backup_target(self, backup_target_id, nfs_mount_opts=None, secret_ref=None,
+                             metadata=None, is_default=None):
+        """
+        Update mutable attributes of an existing backup target (PUT /backup_targets/{id}).
+        """
+        target_data = {}
+        if nfs_mount_opts is not None:
+            target_data['nfs_mount_opts'] = nfs_mount_opts
+        if secret_ref is not None:
+            target_data['secret_ref'] = secret_ref
+        if metadata is not None:
+            target_data['metadata'] = metadata
+        if is_default is not None:
+            target_data['is_default'] = 1 if is_default else 0
+
+        payload = {'backup_target': target_data}
+        res = self.dms_request('PUT', '/backup_targets/%s' % backup_target_id, json_data=payload)
+        if isinstance(res, dict) and 'backup_target' in res:
+            return res['backup_target']
+        return res
+
+    def delete_backup_target(self, backup_target_id):
+        """
+        Delete an existing backup target (DELETE /backup_targets/{id}).
+        """
+        return self.dms_request('DELETE', '/backup_targets/%s' % backup_target_id)
+
+    def set_default_backup_target(self, backup_target_id):
+        """
+        Set a backup target as the default target.
+        """
+        return self.dms_request('GET', '/backup_targets/%s/set_default' % backup_target_id)
+
+    # -------------------------------------------------------------------------
+    # Backup Target Type (BTT) Operations
+    # -------------------------------------------------------------------------
+
+    def list_backup_target_types(self):
+        """
+        List all backup target types (GET /backup_target_types).
+        """
+        res = self.dms_request('GET', '/backup_target_types')
+        if isinstance(res, dict) and 'backup_target_types' in res:
+            return res['backup_target_types']
+        elif isinstance(res, list):
+            return res
+        return []
+
+    def get_backup_target_type(self, btt_id):
+        """
+        Get backup target type details by UUID (GET /backup_target_types/{id}).
+        """
+        res = self.dms_request('GET', '/backup_target_types/%s' % btt_id)
+        if isinstance(res, dict) and 'backup_target_types' in res:
+            return res['backup_target_types']
+        elif isinstance(res, dict) and 'backup_target_type' in res:
+            return res['backup_target_type']
+        return res
+
+    def find_backup_target_type(self, name=None, btt_id=None):
+        """
+        Find a backup target type matching name or UUID.
+        """
+        btts = self.list_backup_target_types()
+        for btt in btts:
+            if btt_id and btt.get('id') == btt_id:
+                return btt
+            if name and btt.get('name') == name:
+                return btt
+        return None
+
+    def create_backup_target_type(self, name, backup_target_id, description=None,
+                                  is_public=True, metadata=None):
+        """
+        Create a backup target type (POST /backup_target_types).
+        """
+        btt_data = {
+            'name': name,
+            'backup_targets_id': backup_target_id,
+            'is_public': is_public
+        }
+        if description:
+            btt_data['description'] = description
+        if metadata:
+            btt_data['backup_target_type_metadata'] = metadata
+
+        payload = {'backup_target_type': btt_data}
+        res = self.dms_request('POST', '/backup_target_types', json_data=payload)
+        if isinstance(res, dict) and 'backup_target_type' in res:
+            return res['backup_target_type']
+        return res
+
+    def delete_backup_target_type(self, btt_id):
+        """
+        Delete a backup target type (DELETE /backup_target_types/{id}).
+        """
+        return self.dms_request('DELETE', '/backup_target_types/%s' % btt_id)
+
+    def add_projects_to_btt(self, btt_id, project_ids):
+        """
+        Assign projects to a backup target type (POST /backup_target_types/{id}/add_projects).
+        """
+        if isinstance(project_ids, str):
+            project_ids = [project_ids]
+        payload = {'add_projects': project_ids}
+        return self.dms_request('POST', '/backup_target_types/%s/add_projects' % btt_id, json_data=payload)
+
+    def remove_projects_from_btt(self, btt_id, project_ids):
+        """
+        Remove projects from a backup target type (POST /backup_target_types/{id}/remove_projects).
+        """
+        if isinstance(project_ids, str):
+            project_ids = [project_ids]
+        payload = {'remove_projects': project_ids}
+        return self.dms_request('POST', '/backup_target_types/%s/remove_projects' % btt_id, json_data=payload)
+
+    # -------------------------------------------------------------------------
+    # Workload Operations
+    # -------------------------------------------------------------------------
+
+    def list_workload_types(self, project_id=None):
+        """
+        List supported workload types (Parallel / Serial).
+        GET /v1/{project_id}/workload_types/detail
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/workload_types/detail'
+        else:
+            subpath = '/v1/%s/workload_types/detail' % target_project
+
+        res = self.get(subpath)
+        if isinstance(res, dict) and 'workload_types' in res:
+            return res['workload_types']
+        elif isinstance(res, list):
+            return res
+        return []
+
     def list_workloads(self, project_id=None, all_projects=False, detailed=True, nfs_share=None):
         """
         List workloads for a given project or all projects.
@@ -558,8 +862,7 @@ class TrilioClient:
                 msg="No OpenStack project ID available. Provide project_id parameter or scope authentication to a project."
             )
 
-        # Build path ensuring /v1/{target_project} prefix if needed
-        endpoint_has_project = bool(re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint))
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
         if endpoint_has_project:
             subpath = '/workloads/detail' if detailed else '/workloads'
         else:
@@ -586,7 +889,7 @@ class TrilioClient:
         if not target_project:
             self.module.fail_json(msg="No OpenStack project ID available.")
 
-        endpoint_has_project = bool(re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint))
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
         if endpoint_has_project:
             subpath = '/workloads/%s' % workload_id
         else:
@@ -596,3 +899,132 @@ class TrilioClient:
         if isinstance(result, dict) and 'workload' in result:
             return result['workload']
         return result
+
+    def get_workload_by_name(self, name, project_id=None):
+        """
+        Find a single workload matching the given name within the project.
+        """
+        workloads = self.list_workloads(project_id=project_id, detailed=True)
+        for wl in workloads:
+            if wl.get('name') == name:
+                return wl
+        return None
+
+    def create_workload(self, name, instances, workload_type_id=None, description=None,
+                        backup_target_types=None, jobschedule=None, metadata=None,
+                        source_platform='openstack', project_id=None):
+        """
+        Create a new workload (POST /v1/{project_id}/workloads).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        # Resolve workload_type_id if not provided
+        if not workload_type_id:
+            wl_types = self.list_workload_types(project_id=target_project)
+            parallel_type = next((t for t in wl_types if 'parallel' in t.get('name', '').lower()), None)
+            if parallel_type:
+                workload_type_id = parallel_type.get('id')
+            elif wl_types:
+                workload_type_id = wl_types[0].get('id')
+            else:
+                workload_type_id = '272f3105-fhang-4b36-81cf-fb15b8054c25'
+
+        # Format instances list: [{"instance-id": "UUID"}, ...]
+        formatted_instances = []
+        for inst in (instances or []):
+            if isinstance(inst, dict):
+                inst_id = inst.get('instance-id') or inst.get('id')
+                if inst_id:
+                    formatted_instances.append({'instance-id': str(inst_id)})
+            elif isinstance(inst, str):
+                formatted_instances.append({'instance-id': inst})
+
+        wl_data = {
+            'name': name,
+            'workload_type_id': workload_type_id,
+            'source_platform': source_platform or 'openstack',
+            'instances': formatted_instances,
+        }
+        if description:
+            wl_data['description'] = description
+        if backup_target_types:
+            wl_data['backup_target_types'] = backup_target_types
+        if jobschedule:
+            wl_data['jobschedule'] = jobschedule
+        if metadata:
+            wl_data['metadata'] = metadata
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/workloads'
+        else:
+            subpath = '/v1/%s/workloads' % target_project
+
+        payload = {'workload': wl_data}
+        res = self.post(subpath, json_data=payload)
+        if isinstance(res, dict) and 'workload' in res:
+            return res['workload']
+        return res
+
+    def update_workload(self, workload_id, name=None, description=None, instances=None,
+                        jobschedule=None, metadata=None, project_id=None):
+        """
+        Update an existing workload (PUT /v1/{project_id}/workloads/{workload_id}).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        wl_data = {}
+        if name is not None:
+            wl_data['name'] = name
+        if description is not None:
+            wl_data['description'] = description
+        if instances is not None:
+            formatted_instances = []
+            for inst in instances:
+                if isinstance(inst, dict):
+                    inst_id = inst.get('instance-id') or inst.get('id')
+                    if inst_id:
+                        formatted_instances.append({'instance-id': str(inst_id)})
+                elif isinstance(inst, str):
+                    formatted_instances.append({'instance-id': inst})
+            wl_data['instances'] = formatted_instances
+        if jobschedule is not None:
+            wl_data['jobschedule'] = jobschedule
+        if metadata is not None:
+            wl_data['metadata'] = metadata
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/workloads/%s' % workload_id
+        else:
+            subpath = '/v1/%s/workloads/%s' % (target_project, workload_id)
+
+        payload = {'workload': wl_data}
+        res = self.put(subpath, json_data=payload)
+        if isinstance(res, dict) and 'workload' in res:
+            return res['workload']
+        return res
+
+    def delete_workload(self, workload_id, database_only=False, project_id=None):
+        """
+        Delete a workload (DELETE /v1/{project_id}/workloads/{workload_id}).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/workloads/%s' % workload_id
+        else:
+            subpath = '/v1/%s/workloads/%s' % (target_project, workload_id)
+
+        if database_only:
+            subpath += '?database_only=True'
+
+        return self.delete(subpath)
+

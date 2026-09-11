@@ -1,0 +1,47 @@
+---
+# Playbook: Register an S3 Backup Target using Trilio 6.2+ DMS and OpenStack Barbican Secret
+#
+# Security Principle:
+# - In Trilio 6.2+, S3 credentials (access_key, secret_key, endpoint, bucket) must be stored
+#   in OpenStack Barbican Key Manager. The URL reference (secret_ref) is passed to Trilio.
+# - No plaintext AWS/S3 access keys or secret tokens are ever committed to Git or playbooks.
+#
+# Usage:
+#   ansible-playbook -i localhost playbooks/create_backup_target_s3.yml
+#
+- name: Configure S3 Backup Target with Barbican Secret
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
+    s3_endpoint: "{{ lookup('ansible.builtin.env', 'TRILIO_S3_ENDPOINT') | default('https://s3.eu-west-1.amazonaws.com', true) }}"
+    s3_bucket: "{{ lookup('ansible.builtin.env', 'TRILIO_S3_BUCKET') | default('company-openstack-backups', true) }}"
+    # The Barbican secret reference URL (created via openstack secret store or terraform)
+    barbican_secret_ref: "{{ lookup('ansible.builtin.env', 'TRILIO_BARBICAN_SECRET_REF') | default('https://barbican.cloud.local:9311/v1/secrets/d12d4d98-11a2-4fa8-b0a3-95c52c4238e1', true) }}"
+    btt_name: "{{ lookup('ansible.builtin.env', 'TRILIO_S3_BTT_NAME') | default('s3-cold-storage', true) }}"
+
+  tasks:
+    - name: Create or update S3 Backup Target
+      trilio.trilio_openstack.backup_target:
+        cloud: "{{ cloud_name }}"
+        state: present
+        target_type: s3
+        s3_endpoint_url: "{{ s3_endpoint }}"
+        s3_bucket: "{{ s3_bucket }}"
+        secret_ref: "{{ barbican_secret_ref }}"
+        btt_name: "{{ btt_name }}"
+        immutable: false
+        is_default: false
+        metadata:
+          tier: "cold-s3"
+          managed_by: "ansible"
+      register: s3_result
+
+    - name: Display S3 Backup Target details
+      ansible.builtin.debug:
+        msg: >-
+          S3 Target ID: {{ s3_result.backup_target.id }},
+          BTT Name: {{ s3_result.backup_target.btt_name }},
+          Bucket: {{ s3_result.backup_target.s3_bucket }},
+          Status: {{ s3_result.backup_target.status }}

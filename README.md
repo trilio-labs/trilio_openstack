@@ -2,7 +2,7 @@
 
 An Ansible Collection for operating and automating **Trilio for OpenStack** (TrilioVault / Workload Manager) backup and recovery workflows.
 
-This collection provides purpose-built modules for managing backup targets, workloads, snapshot schedules, full and incremental backups, and restores, designed to work seamlessly alongside standard OpenStack Ansible modules (such as `openstack.cloud`).
+This collection provides purpose-built modules for managing backup targets, backup target types, workloads, snapshot schedules, full and incremental backups, and restores, designed to work seamlessly alongside standard OpenStack Ansible modules (such as `openstack.cloud`).
 
 ---
 
@@ -20,10 +20,27 @@ When authenticating to Keystone, the collection automatically queries the OpenSt
 
 ---
 
-## Security Best Practices
+## Trilio 6.2+ & Dynamic Mounting Service (DMS)
+
+Trilio 6.2 introduces a major architectural enhancement: the **Dynamic Mounting Service (DMS)**.
+
+### How DMS Works
+* **On-Demand Mounting**: Prior to Trilio 6.2, backup targets required static mounts and ran a dedicated container per backup target on every compute and controller node. In Trilio 6.2+, DMS centralizes mount management into a single daemon per node, dynamically mounting storage only when a backup or restore job executes and unmounting it when completed.
+* **API-Driven Target Creation**: With DMS, backup targets (`/backup_targets`) and backup target types (`/backup_target_types`) are created, updated, and deleted directly through the Trilio Workload Manager API.
+* **Backend Reachability Status**: The `status` attribute of backup targets is managed by DMS and reports backend reachability (`online` / `offline`) without requiring a permanent OS mount.
+
+### Zero-Credential Security with OpenStack Barbican
+In Trilio 6.2+, **plaintext S3 credentials are no longer accepted in API request bodies**. Instead:
+1. S3 access credentials (access key, secret key, endpoint, and bucket) must be stored in the **OpenStack Barbican Key Manager** service.
+2. The resulting Barbican secret URL (`secret_ref`, e.g. `https://barbican:9311/v1/secrets/<uuid>`) is passed to the Trilio API.
+3. DMS securely fetches the credentials from Barbican at mount time.
 
 > [!CAUTION]
-> **Zero Credentials in Git/GitHub:** Never commit passwords, tokens, API keys, or raw `clouds.yaml` files containing credentials into source control.
+> **Zero Credentials in Git/GitHub:** Never commit passwords, tokens, API keys, or raw `clouds.yaml` files containing credentials into source control. Always reference Barbican secrets (`secret_ref`) for S3 storage targets and use Ansible Vault or environment variables for Keystone authentication.
+
+---
+
+## Security Best Practices
 
 To ensure production security:
 1. **Restrict `clouds.yaml` file permissions**:
@@ -39,6 +56,7 @@ To ensure production security:
    ansible-vault encrypt credentials.yml
    ```
 4. **Use Keystone Application Credentials**: Prefer project-scoped Application Credentials over administrator passwords for automated CI/CD runners.
+5. **Store S3 Credentials in Barbican**: Never store AWS access keys or S3 secrets in playbooks. Use `openstack secret store` or Terraform to register secrets in Barbican, passing only the `secret_ref` URL.
 
 ---
 
@@ -47,6 +65,7 @@ To ensure production security:
 ### Controller / Execution Environment Requirements
 * **Ansible**: `ansible-core >= 2.12.0` (compatible with Ansible 2.9+)
 * **Python**: Python 3.8+
+* **Trilio**: Trilio for OpenStack >= 6.2 (required for DMS backup target APIs)
 * **Ansible Collections**:
   * `openstack.cloud >= 2.1.0` (required for modern `openstacksdk` compatibility and dual-collection workflows)
 * **Python Libraries**:
@@ -63,39 +82,101 @@ Install Ansible collection dependencies:
 ```bash
 ansible-galaxy collection install -r requirements.yml
 ```
-Or upgrade `openstack.cloud` directly via CLI (note the colon `:` when specifying version constraints):
-```bash
-ansible-galaxy collection install openstack.cloud --upgrade
-# Or with explicit version constraint:
-ansible-galaxy collection install "openstack.cloud:>=2.1.0" --upgrade
-```
 
 ---
 
-## Installation
+## Module Reference: `trilio.trilio_openstack.backup_target`
 
-### Including in `requirements.yml`
-```yaml
-collections:
-  - name: trilio.trilio_openstack
-    type: git
-    source: https://github.com/trilio-labs/trilio_openstack.git
-```
-Install via:
-```bash
-ansible-galaxy collection install -r requirements.yml
-```
+Manages the lifecycle (`state: present | absent`) of Trilio Backup Targets (NFS or S3) and their associated Backup Target Types (BTT) using Trilio 6.2+ Dynamic Mounting Service (DMS) API calls.
 
-### Local Development / Direct Usage
-Ensure this repository resides in your Ansible collections path:
-```text
-<ansible_collections_path>/trilio/trilio_openstack/
-```
-Example `ansible.cfg`:
-```ini
-[defaults]
-collections_paths = ./ansible_collections:~/.ansible/collections:/usr/share/ansible/collections
-```
+> **Note:** Also accessible via alias `trilio.trilio_openstack.trilio_backup_target`.
+
+### Parameter Reference & Variables
+
+| Variable / Parameter | Type | Default | Choices / Aliases | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `state` | `str` | `present` | `present`, `absent` | Desired state of the backup target. |
+| `target_type` | `str` | `None` | `nfs`, `s3` (alias: `type`) | Storage backend type. Required when `state=present` and creating a new target. |
+| `name` | `str` | `None` | | Target identifier or BTT name to query or create. |
+| `backup_target_id` | `str` | `None` | alias: `id` | Specific UUID of an existing backup target to update or delete. |
+| `filesystem_export` | `str` | `None` | | NFS filesystem export path (e.g. `192.168.10.50:/var/nfs/trilio`). Required when `target_type=nfs` and `state=present`. |
+| `nfs_mount_opts` | `str` | `None` | | NFS mount options string (e.g. `nolock,soft,timeo=600,intr,lookupcache=none,nfsvers=3,retrans=10`). |
+| `s3_endpoint_url` | `str` | `None` | | S3 endpoint URL (e.g. `https://s3.eu-west-1.amazonaws.com`). Required when `target_type=s3` and `state=present`. |
+| `s3_bucket` | `str` | `None` | | S3 bucket name. Required when `target_type=s3` and `state=present`. |
+| `secret_ref` | `str` | `None` | | OpenStack Barbican secret URL referencing S3 access credentials. Required for S3 in Trilio 6.2+ DMS. |
+| `btt_name` | `str` | `None` | | Name of the Backup Target Type (BTT) to link/create. Defaults to `name` or export/bucket if omitted. |
+| `is_default` | `bool` | `false` | | Whether this backup target should be marked as the default backup target. |
+| `immutable` | `bool` | `false` | | Whether S3 Object Lock (immutability) is enabled on the target bucket. |
+| `metadata` | `dict` | `None` | | Metadata key-value pairs associated with the backup target. |
+| `require_dms` | `bool` | `true` | | Enforces verification that the Trilio API supports DMS (Trilio 6.2+). Fails early on older Trilio releases. |
+| `cloud` | `raw` | `None` | | Named cloud in `clouds.yaml` or cloud configuration dictionary. |
+| `auth` | `dict` | `None` | `no_log: true` | Keystone authentication credentials dictionary. |
+| `auth_type` | `str` | `None` | | Keystone auth plugin name (e.g. `password`, `v3applicationcredential`). |
+| `region_name` | `str` | `None` | | OpenStack region name to query. |
+| `interface` | `str` | `public` | `public`, `internal`, `admin` | Keystone catalog endpoint interface. |
+| `validate_certs` | `bool` | `true` | alias: `verify` | Whether to validate SSL/TLS certificates. |
+| `timeout` | `int` | `180` | | HTTP request timeout in seconds. |
+| `trilio_endpoint` | `str` | `None` | | Explicit URL override for Trilio Workload Manager API. |
+
+### Return Values
+
+| Return Field | Type | Description |
+| :--- | :--- | :--- |
+| `backup_target` | `dict` | Dictionary containing target details (`id`, `type`, `filesystem_export`, `s3_endpoint_url`, `s3_bucket`, `secret_ref`, `btt_name`, `status`, `is_default`, `immutable`, `metadata`). |
+| `changed` | `bool` | Whether the target was created, updated, or removed. |
+
+---
+
+## Module Reference: `trilio.trilio_openstack.workload`
+
+Manages the lifecycle (`state: present | absent`) of Trilio backup workloads (protection plans), instance membership, backup target types, and snapshot job schedules.
+
+> **Note:** Also accessible via alias `trilio.trilio_openstack.trilio_workload`.
+
+### Parameter Reference & Variables
+
+| Variable / Parameter | Type | Default | Choices / Aliases | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `state` | `str` | `present` | `present`, `absent` | Desired state of the workload. |
+| `name` | `str` | `None` | | Name of the workload. Required when `state=present` and creating a new workload. |
+| `workload_id` | `str` | `None` | alias: `id` | Specific UUID of an existing workload to update or delete. |
+| `description` | `str` | `None` | | Description of the workload and its purpose. |
+| `workload_type` | `str` | `None` | alias: `workload_type_id` | Workload type name (`Parallel` or `Serial`) or type UUID. Defaults to Parallel if omitted. |
+| `instances` | `list` | `[]` | | List of OpenStack compute instance (VM) UUIDs or dictionaries (`id` or `instance-id`) to protect. |
+| `backup_target_type` | `str` | `None` | aliases: `backup_target_types`, `btt` | Name or UUID of the Backup Target Type (BTT) to use as the backup destination. |
+| `jobschedule` | `dict` | `None` | | Snapshot schedule configuration dictionary (`enabled`, `interval`, `start_time`, `timezone`, `retention_policy_type`, `retention_policy_value`, `fullbackup_interval`). |
+| `metadata` | `dict` | `None` | | Metadata key-value dictionary to attach to the workload. |
+| `source_platform` | `str` | `openstack` | | Origin platform identifier (typically `openstack`). |
+| `project_id` | `str` | `None` | | OpenStack project UUID to create/manage the workload within (defaults to authenticated token's project). |
+| `cloud` | `raw` | `None` | | Named cloud in `clouds.yaml` or cloud configuration dictionary. |
+| `auth` | `dict` | `None` | `no_log: true` | Keystone authentication credentials dictionary. |
+| `validate_certs` | `bool` | `true` | alias: `verify` | Whether to validate SSL/TLS certificates. |
+| `timeout` | `int` | `180` | | HTTP request timeout in seconds. |
+
+### Return Values
+
+| Return Field | Type | Description |
+| :--- | :--- | :--- |
+| `workload` | `dict` | Detailed dictionary of the workload (`id`, `name`, `description`, `status`, `project_id`, `workload_type_id`, `instances`, `jobschedule`, `metadata`). |
+| `changed` | `bool` | Whether the workload was created, updated, or removed. |
+
+---
+
+## Module Reference: `trilio.trilio_openstack.backup_target_info`
+
+Queries configured backup targets, their DMS backend reachability status (`online` / `offline`), and associated Backup Target Types (BTT).
+
+> **Note:** Also accessible via alias `trilio.trilio_openstack.trilio_backup_target_info`.
+
+### Parameter Reference & Variables
+
+| Variable / Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `backup_target_id` | `str` | `None` | Specific UUID of a backup target to query (alias: `id`). |
+| `name` | `str` | `None` | Filter targets by name or BTT name. |
+| `target_type` | `str` | `None` | Filter targets by type (`nfs` or `s3`, alias: `type`). |
+| `include_target_types` | `bool` | `true` | Whether to also return the list of configured Backup Target Types (BTT). |
+| `require_dms` | `bool` | `true` | Enforces Trilio 6.2+ DMS capability check. |
 
 ---
 
@@ -103,199 +184,142 @@ collections_paths = ./ansible_collections:~/.ansible/collections:/usr/share/ansi
 
 Retrieves information, status, instance membership, and schedule details for Trilio workloads in OpenStack.
 
-> **Note:** The module is also accessible via the alias `trilio.trilio_openstack.trilio_workload_info`.
+> **Note:** Also accessible via alias `trilio.trilio_openstack.trilio_workload_info`.
 
 ### Parameter Reference & Variables
 
 | Variable / Parameter | Type | Default | Choices / Aliases | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `cloud` | `raw` | `None` | | Name of the cloud in `clouds.yaml`, or a dictionary containing cloud configuration. |
-| `auth` | `dict` | `None` | `no_log: true` | Keystone authentication dictionary containing `auth_url`, `username`, `password`, `project_name`, etc. |
-| `auth_type` | `str` | `None` | | Authentication plugin name (e.g. `password`, `v3applicationcredential`, `token`). |
-| `region_name` | `str` | `None` | | Specific OpenStack region name to query. |
-| `interface` | `str` | `public` | `public`, `internal`, `admin` (alias: `endpoint_type`) | Keystone catalog endpoint interface used to locate Trilio WLM API. |
-| `validate_certs` | `bool` | `true` | alias: `verify` | Whether to validate SSL/TLS certificates. |
-| `ca_cert` | `str` | `None` | alias: `cacert` | Path to CA certificate bundle file. |
-| `client_cert` | `str` | `None` | alias: `cert` | Path to SSL client certificate file. |
-| `client_key` | `str` | `None` | `no_log: true`, alias: `key` | Path to SSL client private key file. |
-| `timeout` | `int` | `180` | | HTTP request timeout in seconds. |
-| `api_timeout` | `int` | `None` | | OpenStack SDK client timeout in seconds. |
-| `trilio_endpoint` | `str` | `None` | | Explicit override URL for Trilio WLM API (e.g. `https://tvm.internal:8780/v1`). If omitted, discovered via Keystone. |
+| `cloud` | `raw` | `None` | | Name of the cloud in `clouds.yaml`. |
+| `auth` | `dict` | `None` | `no_log: true` | Keystone authentication dictionary. |
 | `name` | `str` | `None` | | Workload name or glob pattern (e.g. `prod-*`) to filter results. |
 | `workload_id` | `str` | `None` | alias: `id` | Specific UUID of a workload to query. |
-| `all_projects` | `bool` | `false` | | When `true`, queries workloads across all projects (requires OpenStack cloud administrator permissions). |
-| `project_id` | `str` | `None` | | OpenStack project UUID to query workloads for. Defaults to the authenticated token's project ID. |
-| `detailed` | `bool` | `true` | | When `true`, calls `/workloads/detail` to return protected VM lists, job schedules, and storage targets. |
-| `nfs_share` | `str` | `None` | | Filter workloads stored on a specific backup target NFS share path. |
+| `all_projects` | `bool` | `false` | | Query workloads across all projects (admin privileges required). |
+| `detailed` | `bool` | `true` | | Return full details including VM lists, schedules, and storage URLs. |
+| `nfs_share` | `str` | `None` | | Filter workloads stored on a specific backup target NFS share. |
 
 ---
 
-### Return Values
+## Playbook Workflows & Examples
 
-The module returns a dictionary with `changed: false` and a list named `workloads`:
+All example playbooks reside in the [`playbooks/`](playbooks/) directory:
 
+### 1. Register an NFS Backup Target via DMS (`playbooks/create_backup_target_nfs.yml`)
+Registers a new NFS backup target and automatically creates the linked Backup Target Type:
 ```yaml
-workloads:
-  - id: "7b47b4e8-8db9-4670-8b1e-0679815049cf"
-    name: "production-web-cluster"
-    description: "Nightly backup of web frontend VMs"
-    status: "available"
-    project_id: "c38ff02cb5794cb4b6e5e8e45f9db1d6"
-    user_id: "3c368d4078bd44a0bdf5dbceeeebef31"
-    workload_type_id: "272f3105-fhang-4b36-81cf-fb15b8054c25"
-    storage_url: "192.168.10.50:/var/nfs/trilio"
-    instances:
-      - id: "28e08d66-8968-45e0-9bc7-5bb83fc44007"
-        name: "web-01"
-      - id: "49f19e77-9079-56f1-0cd8-6cc94gd55118"
-        name: "web-02"
-    jobschedule:
-      enabled: true
-      interval: "24 hr"
-      retention_policy_type: "Number of Snapshots to Keep"
-      retention_policy_value: "30"
-      fullbackup_interval: "-1"
-      timezone: "UTC"
-    metadata: {}
-    created_at: "2026-09-01T08:30:00.000000"
-    updated_at: "2026-09-10T02:00:00.000000"
-```
-
----
-
-## Playbook Examples
-
-All example playbooks are available in the [`playbooks/`](playbooks/) directory:
-
-### 1. Authenticating via Environment Variables (`playbooks/list_workloads_env.yml`)
-When you have sourced your OpenStack RC file (`source openrc.sh`):
-```yaml
-- name: List Trilio workloads using active environment variables
+- name: Register NFS Backup Target in Trilio
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Fetch workloads
-      trilio.trilio_openstack.workload_info:
-      register: result
-
-    - name: Print discovered workloads
-      ansible.builtin.debug:
-        msg: "Discovered {{ result.workloads | length }} workload(s): {{ result.workloads | map(attribute='name') | list }}"
+    - name: Ensure NFS backup target exists
+      trilio.trilio_openstack.backup_target:
+        cloud: openstack
+        state: present
+        target_type: nfs
+        filesystem_export: "192.168.10.50:/var/nfs/trilio"
+        nfs_mount_opts: "nolock,soft,timeo=600,intr,lookupcache=none,nfsvers=3,retrans=10"
+        btt_name: "primary-nfs-target"
+        is_default: true
+      register: nfs_target
 ```
 
-### 2. Authenticating via `clouds.yaml` (`playbooks/list_workloads_clouds_yaml.yml`)
-When using `~/.config/openstack/clouds.yaml`:
+### 2. Register an S3 Backup Target with Barbican Secret (`playbooks/create_backup_target_s3.yml`)
+Registers an S3 bucket using a Barbican `secret_ref`, adhering to the strict zero-credential security rule:
 ```yaml
-- name: List Trilio workloads using clouds.yaml
-  hosts: localhost
-  gather_facts: false
-
-  vars:
-    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
-
-  tasks:
-    - name: Fetch workloads
-      trilio.trilio_openstack.workload_info:
-        cloud: "{{ cloud_name }}"
-      register: result
-
-    - name: Print discovered workloads
-      ansible.builtin.debug:
-        msg: "Discovered {{ result.workloads | length }} workload(s): {{ result.workloads | map(attribute='name') | list }}"
-```
-
-### 3. Authenticating via Explicit `auth` Dictionary (`playbooks/list_workloads_auth_dict.yml`)
-When credentials are passed dynamically from variables or Ansible Vault:
-```yaml
-- name: List Trilio workloads using Keystone Auth Dictionary
+- name: Register S3 Backup Target in Trilio
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Fetch workloads using Keystone v3 credentials
-      trilio.trilio_openstack.workload_info:
-        auth:
-          auth_url: "{{ lookup('ansible.builtin.env', 'OS_AUTH_URL') }}"
-          username: "{{ lookup('ansible.builtin.env', 'OS_USERNAME') }}"
-          password: "{{ lookup('ansible.builtin.env', 'OS_PASSWORD') }}"
-          project_name: "{{ lookup('ansible.builtin.env', 'OS_PROJECT_NAME') | default(lookup('ansible.builtin.env', 'OS_TENANT_NAME'), true) }}"
-          user_domain_name: "{{ lookup('ansible.builtin.env', 'OS_USER_DOMAIN_NAME') | default('Default', true) }}"
-          project_domain_name: "{{ lookup('ansible.builtin.env', 'OS_PROJECT_DOMAIN_NAME') | default('Default', true) }}"
-        validate_certs: "{{ (lookup('ansible.builtin.env', 'OS_INSECURE') | lower != 'true') and (lookup('ansible.builtin.env', 'OS_VERIFY') | default('true', true) | bool) }}"
-      register: result
+    - name: Ensure S3 backup target exists
+      trilio.trilio_openstack.backup_target:
+        cloud: openstack
+        state: present
+        target_type: s3
+        s3_endpoint_url: "https://s3.eu-west-1.amazonaws.com"
+        s3_bucket: "company-openstack-backups"
+        secret_ref: "https://barbican.cloud.local:9311/v1/secrets/d12d4d98-11a2-4fa8-b0a3-95c52c4238e1"
+        btt_name: "s3-cold-storage"
+        immutable: false
+        is_default: false
+      register: s3_target
 ```
 
-### 4. Authenticating via Keystone Application Credentials (`playbooks/list_workloads_app_cred.yml`)
+### 3. Create a Protection Workload (`playbooks/create_workload.yml`)
+Creates an automated daily backup workload protecting compute instances:
 ```yaml
-- name: List Trilio workloads using Application Credentials
+- name: Protect Production Web Servers
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Fetch workloads
-      trilio.trilio_openstack.workload_info:
-        auth_type: v3applicationcredential
-        auth:
-          auth_url: "{{ lookup('ansible.builtin.env', 'OS_AUTH_URL') }}"
-          application_credential_id: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_ID') | default(omit, true) }}"
-          application_credential_name: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_NAME') | default(omit, true) }}"
-          application_credential_secret: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_SECRET') }}"
-        validate_certs: "{{ (lookup('ansible.builtin.env', 'OS_INSECURE') | lower != 'true') and (lookup('ansible.builtin.env', 'OS_VERIFY') | default('true', true) | bool) }}"
-      register: result
+    - name: Create Trilio workload
+      trilio.trilio_openstack.workload:
+        cloud: openstack
+        state: present
+        name: "production-web-cluster"
+        description: "Automated daily backup of web cluster"
+        backup_target_type: "primary-nfs-target"
+        instances:
+          - "28e08d66-8968-45e0-9bc7-5bb83fc44007"
+          - "49f19e77-9079-56f1-0cd8-6cc94gd55118"
+        jobschedule:
+          enabled: true
+          interval: "24 hr"
+          start_time: "02:00 AM"
+          timezone: "UTC"
+          retention_policy_type: "Number of Snapshots to Keep"
+          retention_policy_value: "30"
+          fullbackup_interval: "-1"
 ```
 
-### 5. Complementary Workflow with `openstack.cloud` (`playbooks/list_workloads_combined.yml`)
-Demonstrates how both collections work together in a single playbook to cross-reference OpenStack compute instances with Trilio backup workloads (supports both `clouds.yaml` and active environment variables seamlessly):
+### 4. End-to-End Discovery & Protection (`playbooks/setup_trilio_end_to_end.yml`)
+Combines `openstack.cloud.server_info`, `trilio.trilio_openstack.backup_target`, and `trilio.trilio_openstack.workload` in a unified workflow:
 ```yaml
-- name: Audit OpenStack VMs and Trilio Protection
+- name: Discover VMs and Setup Trilio Protection
   hosts: localhost
   gather_facts: false
 
-  vars:
-    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default(omit, true) }}"
-
   tasks:
-    - name: Retrieve all compute instances
+    - name: Ensure NFS backup target is registered via DMS
+      trilio.trilio_openstack.backup_target:
+        cloud: openstack
+        state: present
+        target_type: nfs
+        filesystem_export: "192.168.10.50:/var/nfs/trilio"
+        btt_name: "primary-nfs-target"
+        is_default: true
+
+    - name: Discover all active compute instances
       openstack.cloud.server_info:
-        cloud: "{{ cloud_name | default(omit) }}"
+        cloud: openstack
       register: nova_servers
 
-    - name: Retrieve all Trilio workloads
-      trilio.trilio_openstack.workload_info:
-        cloud: "{{ cloud_name | default(omit) }}"
-        detailed: true
-      register: trilio_workloads
-
-    - name: Build list of protected VM IDs
-      ansible.builtin.set_fact:
-        protected_ids: >-
-          {{
-            trilio_workloads.workloads
-            | map(attribute='instances')
-            | flatten
-            | map(attribute='id')
-            | list
-          }}
-
-    - name: Report protection status per VM
-      ansible.builtin.debug:
-        msg: "Server {{ item.name }} ({{ item.id }}) is {{ 'PROTECTED' if item.id in protected_ids else 'UNPROTECTED' }}"
-      loop: "{{ nova_servers.servers }}"
+    - name: Create Trilio workload protecting all discovered VMs
+      trilio.trilio_openstack.workload:
+        cloud: openstack
+        state: present
+        name: "all-vms-protection-plan"
+        backup_target_type: "primary-nfs-target"
+        instances: "{{ nova_servers.servers | map(attribute='id') | list }}"
+        jobschedule:
+          enabled: true
+          interval: "24 hr"
+          retention_policy_type: "Number of Snapshots to Keep"
+          retention_policy_value: "14"
 ```
 
 ---
 
 ## Running Tests
 
-Run the unit test suite with `pytest` or Python's built-in `unittest`:
+Run the unit test suite with Python's `unittest`:
 ```bash
-PYTHONPATH=../../.. pytest tests/unit/
-# Or using built-in unittest:
-PYTHONPATH=../../.. python3 -m unittest discover -s tests/unit
+PYTHONPATH=../../.. python3 -m unittest discover -s tests/unit -v
 ```
 
-Verify Ansible playbook syntax:
+Verify Ansible playbook YAML syntax:
 ```bash
 ansible-playbook --syntax-check playbooks/*.yml
 ```

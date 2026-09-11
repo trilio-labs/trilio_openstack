@@ -1,0 +1,70 @@
+---
+# Playbook: End-to-End OpenStack VM Protection with Trilio 6.2+ DMS
+#
+# Workflow:
+# 1. Discover active compute instances tagged for backup using openstack.cloud.server_info
+# 2. Ensure the DMS Backup Target (NFS) is configured using trilio.trilio_openstack.backup_target
+# 3. Create or update the Trilio Workload protecting the discovered servers
+#
+# Usage:
+#   ansible-playbook -i localhost playbooks/setup_trilio_end_to_end.yml
+#
+- name: End-to-End Trilio 6.2+ Backup Target and Workload Automation
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
+    nfs_export: "{{ lookup('ansible.builtin.env', 'TRILIO_NFS_EXPORT') | default('192.168.10.50:/var/nfs/trilio', true) }}"
+    btt_name: "{{ lookup('ansible.builtin.env', 'TRILIO_BTT_NAME') | default('primary-nfs-target', true) }}"
+    workload_name: "{{ lookup('ansible.builtin.env', 'WORKLOAD_NAME') | default('auto-discovered-vms-backup', true) }}"
+
+  tasks:
+    - name: 1. Ensure NFS Backup Target is registered via DMS
+      trilio.trilio_openstack.backup_target:
+        cloud: "{{ cloud_name }}"
+        state: present
+        target_type: nfs
+        filesystem_export: "{{ nfs_export }}"
+        nfs_mount_opts: "nolock,soft,timeo=600,intr,lookupcache=none,nfsvers=3,retrans=10"
+        btt_name: "{{ btt_name }}"
+        is_default: true
+      register: target_result
+
+    - name: Report Backup Target Status
+      ansible.builtin.debug:
+        msg: "DMS Backup Target '{{ btt_name }}' is {{ target_result.backup_target.status | default('online') }}"
+
+    - name: 2. Discover compute instances matching workload criteria
+      openstack.cloud.server_info:
+        cloud: "{{ cloud_name }}"
+      register: nova_servers
+
+    - name: Extract VM UUIDs
+      ansible.builtin.set_fact:
+        vm_ids: "{{ nova_servers.servers | map(attribute='id') | list }}"
+
+    - name: 3. Create Trilio Workload protecting discovered instances
+      trilio.trilio_openstack.workload:
+        cloud: "{{ cloud_name }}"
+        state: present
+        name: "{{ workload_name }}"
+        description: "Automated daily backup for all active compute instances"
+        backup_target_type: "{{ btt_name }}"
+        instances: "{{ vm_ids }}"
+        jobschedule:
+          enabled: true
+          interval: "24 hr"
+          start_time: "02:00 AM"
+          timezone: "UTC"
+          retention_policy_type: "Number of Snapshots to Keep"
+          retention_policy_value: "14"
+          fullbackup_interval: "-1"
+      register: workload_result
+
+    - name: Summary Report
+      ansible.builtin.debug:
+        msg: >-
+          Successfully configured Trilio Workload '{{ workload_result.workload.name }}'
+          (ID: {{ workload_result.workload.id }}) protecting {{ vm_ids | length }} VM(s)
+          on Backup Target '{{ btt_name }}'.

@@ -1,0 +1,50 @@
+---
+# Playbook: Create a Trilio Workload Protecting OpenStack Instances
+#
+# Requirements:
+# - Trilio for OpenStack >= 6.2
+# - Configured Backup Target Type (e.g. primary-nfs-target or s3-cold-storage)
+#
+# Usage:
+#   ansible-playbook -i localhost playbooks/create_workload.yml
+#
+- name: Create Trilio Protection Workload
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
+    workload_name: "{{ lookup('ansible.builtin.env', 'WORKLOAD_NAME') | default('production-web-cluster', true) }}"
+    target_btt: "{{ lookup('ansible.builtin.env', 'TRILIO_BTT_NAME') | default('primary-nfs-target', true) }}"
+    # VM IDs can be supplied via environment variable or inventory variables
+    vm_instance_ids: "{{ lookup('ansible.builtin.env', 'PROTECTED_INSTANCE_IDS', default='').split(',') | reject('equalto', '') | list }}"
+
+  tasks:
+    - name: Create or update Trilio Workload
+      trilio.trilio_openstack.workload:
+        cloud: "{{ cloud_name }}"
+        state: present
+        name: "{{ workload_name }}"
+        description: "Automated daily backup of production web application cluster"
+        backup_target_type: "{{ target_btt }}"
+        instances: "{{ vm_instance_ids }}"
+        jobschedule:
+          enabled: true
+          interval: "24 hr"
+          start_time: "01:00 AM"
+          timezone: "UTC"
+          retention_policy_type: "Number of Snapshots to Keep"
+          retention_policy_value: "30"
+          fullbackup_interval: "-1"
+        metadata:
+          environment: "production"
+          compliance: "soc2"
+      register: wl_result
+
+    - name: Display Workload Details
+      ansible.builtin.debug:
+        msg: >-
+          Workload ID: {{ wl_result.workload.id }},
+          Name: {{ wl_result.workload.name }},
+          Status: {{ wl_result.workload.status }},
+          Instances: {{ wl_result.workload.instances | length }}

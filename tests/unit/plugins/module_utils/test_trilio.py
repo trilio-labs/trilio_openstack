@@ -128,6 +128,133 @@ class TestTrilioModuleUtils(unittest.TestCase):
                 self.assertEqual(len(res), 2)
                 mock_get.assert_called_once_with('/v1/proj-123/workloads/detail', params={})
 
+    def test_base_endpoint(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780/v1/3f366be9754044209cf669d62f402bfc', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780/v1/3f366be9754044209cf669d62f402bfc'
+            self.assertEqual(client.base_endpoint, 'http://tvm.internal:8780')
+
+    def test_validate_dms_support_success(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            with patch.object(client, 'dms_request', return_value={'backup_targets': []}):
+                self.assertTrue(client.validate_dms_support())
+
+    def test_validate_dms_support_failure(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            with patch.object(client, 'dms_request', return_value=None):
+                client.validate_dms_support()
+                module.fail_json.assert_called_once()
+                call_kwargs = module.fail_json.call_args[1]
+                self.assertIn("Trilio 6.2 or newer is required", call_kwargs['msg'])
+
+    def test_create_backup_target_nfs(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            mock_bt = {
+                'id': 'bt-nfs-1',
+                'type': 'nfs',
+                'filesystem_export': '192.168.1.50:/var/nfs/backups',
+                'status': 'online',
+                'btt_name': 'nfs-btt'
+            }
+            with patch.object(client, 'dms_request', return_value={'backup_target': mock_bt}) as mock_dms:
+                res = client.create_backup_target(
+                    target_type='nfs',
+                    filesystem_export='192.168.1.50:/var/nfs/backups',
+                    nfs_mount_opts='nolock,soft',
+                    btt_name='nfs-btt',
+                    is_default=1
+                )
+                self.assertEqual(res['id'], 'bt-nfs-1')
+                mock_dms.assert_called_once_with('POST', '/backup_targets', json_data={
+                    'backup_target': {
+                        'type': 'nfs',
+                        'is_default': 1,
+                        'btt_name': 'nfs-btt',
+                        'filesystem_export': '192.168.1.50:/var/nfs/backups',
+                        'nfs_mount_opts': 'nolock,soft'
+                    }
+                })
+
+    def test_create_backup_target_s3_with_barbican_secret(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            mock_bt = {
+                'id': 'bt-s3-1',
+                'type': 's3',
+                's3_endpoint_url': 'https://s3.amazonaws.com',
+                's3_bucket': 'prod-backups',
+                'status': 'online'
+            }
+            with patch.object(client, 'dms_request', return_value={'backup_target': mock_bt}) as mock_dms:
+                res = client.create_backup_target(
+                    target_type='s3',
+                    s3_endpoint_url='https://s3.amazonaws.com',
+                    s3_bucket='prod-backups',
+                    secret_ref='https://barbican:9311/v1/secrets/sec-123',
+                    btt_name='s3-btt',
+                    immutable=1
+                )
+                self.assertEqual(res['id'], 'bt-s3-1')
+                mock_dms.assert_called_once_with('POST', '/backup_targets', json_data={
+                    'backup_target': {
+                        'type': 's3',
+                        'is_default': 0,
+                        'btt_name': 's3-btt',
+                        's3_endpoint_url': 'https://s3.amazonaws.com',
+                        's3_bucket': 'prod-backups',
+                        'secret_ref': 'https://barbican:9311/v1/secrets/sec-123',
+                        'immutable': 1
+                    }
+                })
+
+    def test_create_workload(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            mock_wl = {
+                'id': 'wl-created-1',
+                'name': 'web-tier-backup',
+                'status': 'available'
+            }
+            with patch.object(client, 'list_workload_types', return_value=[{'id': 'type-parallel', 'name': 'Parallel'}]):
+                with patch.object(client, 'post', return_value={'workload': mock_wl}) as mock_post:
+                    res = client.create_workload(
+                        name='web-tier-backup',
+                        instances=['vm-uuid-1', {'id': 'vm-uuid-2'}],
+                        description='Backup for web tier',
+                        backup_target_types='btt-uuid-1',
+                        jobschedule={'enabled': True, 'interval': '24 hr'}
+                    )
+                    self.assertEqual(res['id'], 'wl-created-1')
+                    mock_post.assert_called_once_with('/v1/proj-123/workloads', json_data={
+                        'workload': {
+                            'name': 'web-tier-backup',
+                            'workload_type_id': 'type-parallel',
+                            'source_platform': 'openstack',
+                            'instances': [{'instance-id': 'vm-uuid-1'}, {'instance-id': 'vm-uuid-2'}],
+                            'description': 'Backup for web tier',
+                            'backup_target_types': 'btt-uuid-1',
+                            'jobschedule': {'enabled': True, 'interval': '24 hr'}
+                        }
+                    })
+
 
 if __name__ == '__main__':
     unittest.main()
+

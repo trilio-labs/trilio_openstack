@@ -1,0 +1,41 @@
+---
+# Playbook: Register an NFS Backup Target using Trilio 6.2+ Dynamic Mounting Service (DMS)
+#
+# Requirements:
+# - Trilio for OpenStack >= 6.2
+# - NFS share reachable from OpenStack controller and compute nodes
+#
+# Usage:
+#   ansible-playbook -i localhost playbooks/create_backup_target_nfs.yml
+#
+- name: Configure NFS Backup Target with DMS
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
+    nfs_export: "{{ lookup('ansible.builtin.env', 'TRILIO_NFS_EXPORT') | default('192.168.10.50:/var/nfs/trilio', true) }}"
+    btt_name: "{{ lookup('ansible.builtin.env', 'TRILIO_BTT_NAME') | default('primary-nfs-target', true) }}"
+
+  tasks:
+    - name: Create or update NFS Backup Target
+      trilio.trilio_openstack.backup_target:
+        cloud: "{{ cloud_name }}"
+        state: present
+        target_type: nfs
+        filesystem_export: "{{ nfs_export }}"
+        nfs_mount_opts: "nolock,soft,timeo=600,intr,lookupcache=none,nfsvers=3,retrans=10"
+        btt_name: "{{ btt_name }}"
+        is_default: true
+        metadata:
+          tier: "standard-nfs"
+          managed_by: "ansible"
+      register: nfs_result
+
+    - name: Display NFS Backup Target details
+      ansible.builtin.debug:
+        msg: >-
+          Backup Target ID: {{ nfs_result.backup_target.id }},
+          BTT Name: {{ nfs_result.backup_target.btt_name }},
+          Status: {{ nfs_result.backup_target.status }},
+          Default: {{ nfs_result.backup_target.is_default }}
