@@ -128,6 +128,24 @@ class TestTrilioModuleUtils(unittest.TestCase):
                 self.assertEqual(len(res), 2)
                 mock_get.assert_called_once_with('/v1/proj-123/workloads/detail', params={})
 
+    def test_list_workloads_s3_filter(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://trilio:8780', 'validate_certs': True, 'timeout': 30}
+        mock_workloads = [
+            {'id': 'wl-1', 'name': 'nfs-backup', 'storage_url': '192.168.1.10:/backups'},
+            {'id': 'wl-2', 'name': 's3-backup', 'storage_url': 's3://company-openstack-backups'}
+        ]
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://trilio:8780'
+            client.project_id = 'proj-123'
+
+            with patch.object(client, 'get', return_value={'workloads': mock_workloads}):
+                res = client.list_workloads(s3_bucket='company-openstack-backups')
+                self.assertEqual(len(res), 1)
+                self.assertEqual(res[0]['id'], 'wl-2')
+                self.assertEqual(res[0]['name'], 's3-backup')
+
     def test_base_endpoint(self):
         module = MagicMock()
         module.params = {'trilio_endpoint': 'http://tvm.internal:8780/v1/3f366be9754044209cf669d62f402bfc', 'validate_certs': True, 'timeout': 30}

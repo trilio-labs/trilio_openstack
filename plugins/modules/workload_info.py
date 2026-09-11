@@ -47,7 +47,23 @@ options:
   nfs_share:
     description:
       - Optional backup target NFS share path to filter workloads by.
+      - Supported by the upstream Trilio API as a query parameter.
     type: str
+  s3_bucket:
+    description:
+      - Optional S3 bucket name to filter workloads by.
+      - Filters workloads storing backups on the specified S3 bucket.
+    type: str
+  backup_target:
+    description:
+      - Unified backup target identifier to filter workloads by.
+      - Can match an NFS filesystem export path, an S3 bucket name, or a Backup Target Type name/UUID.
+    type: str
+  backup_target_type:
+    description:
+      - Optional Backup Target Type (BTT) name or UUID to filter workloads by.
+    type: str
+    aliases: ['btt', 'backup_target_types']
   trilio_endpoint:
     description:
       - Optional explicit URL for the Trilio Workload Manager API (wlm-api).
@@ -143,6 +159,20 @@ EXAMPLES = r'''
     cloud: openstack-admin
     all_projects: true
   register: all_workloads
+
+# Filter workloads by S3 bucket
+- name: List workloads targeting S3 bucket
+  trilio.trilio_openstack.workload_info:
+    cloud: openstack
+    s3_bucket: "company-openstack-backups"
+  register: s3_workloads
+
+# Filter workloads by Backup Target Type or NFS share
+- name: List workloads on primary NFS target
+  trilio.trilio_openstack.workload_info:
+    cloud: openstack
+    backup_target: "primary-nfs-target"
+  register: nfs_workloads
 
 # Authenticate using Keystone Application Credentials without storing credentials in playbooks
 - name: Authenticate via Application Credentials
@@ -240,6 +270,9 @@ def run_module():
         project_id=dict(type='str'),
         detailed=dict(type='bool', default=True),
         nfs_share=dict(type='str'),
+        s3_bucket=dict(type='str'),
+        backup_target=dict(type='str'),
+        backup_target_type=dict(type='str', aliases=['btt', 'backup_target_types']),
     )
 
     argument_spec = trilio_argument_spec(**module_args)
@@ -257,6 +290,9 @@ def run_module():
     project_id = module.params.get('project_id')
     detailed = module.params.get('detailed', True)
     nfs_share = module.params.get('nfs_share')
+    s3_bucket = module.params.get('s3_bucket')
+    backup_target = module.params.get('backup_target')
+    backup_target_type = module.params.get('backup_target_type')
 
     workloads = []
 
@@ -269,7 +305,10 @@ def run_module():
             project_id=project_id,
             all_projects=all_projects,
             detailed=detailed,
-            nfs_share=nfs_share
+            nfs_share=nfs_share,
+            s3_bucket=s3_bucket,
+            backup_target=backup_target,
+            backup_target_type=backup_target_type
         )
 
         if name:
@@ -283,6 +322,7 @@ def run_module():
             workloads = raw_workloads
 
     module.exit_json(changed=False, workloads=workloads)
+    return
 
 
 def main():

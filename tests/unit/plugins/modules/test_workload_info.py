@@ -17,6 +17,9 @@ class TestWorkloadInfoModule(unittest.TestCase):
                 'name': 'production-web',
                 'status': 'available',
                 'project_id': 'proj-100',
+                'storage_url': '192.168.10.50:/var/nfs/trilio',
+                'backup_media_target': '192.168.10.50:/var/nfs/trilio',
+                'backup_target_types': 'btt-nfs-1',
                 'instances': [{'id': 'vm-1', 'name': 'web-1'}]
             },
             {
@@ -24,6 +27,9 @@ class TestWorkloadInfoModule(unittest.TestCase):
                 'name': 'production-db',
                 'status': 'available',
                 'project_id': 'proj-100',
+                'storage_url': 's3://company-openstack-backups',
+                'backup_media_target': 'company-openstack-backups',
+                'backup_target_types': 'btt-s3-1',
                 'instances': [{'id': 'vm-2', 'name': 'db-1'}]
             },
             {
@@ -31,6 +37,9 @@ class TestWorkloadInfoModule(unittest.TestCase):
                 'name': 'staging-web',
                 'status': 'available',
                 'project_id': 'proj-100',
+                'storage_url': 's3://staging-openstack-backups',
+                'backup_media_target': 'staging-openstack-backups',
+                'backup_target_types': 'btt-s3-staging',
                 'instances': [{'id': 'vm-3', 'name': 'staging-1'}]
             }
         ]
@@ -43,7 +52,10 @@ class TestWorkloadInfoModule(unittest.TestCase):
             'all_projects': False,
             'project_id': None,
             'detailed': True,
-            'nfs_share': None
+            'nfs_share': None,
+            's3_bucket': None,
+            'backup_target': None,
+            'backup_target_type': None
         }
 
         mock_client = MagicMock()
@@ -66,7 +78,10 @@ class TestWorkloadInfoModule(unittest.TestCase):
             'all_projects': False,
             'project_id': None,
             'detailed': True,
-            'nfs_share': None
+            'nfs_share': None,
+            's3_bucket': None,
+            'backup_target': None,
+            'backup_target_type': None
         }
 
         mock_client = MagicMock()
@@ -82,6 +97,76 @@ class TestWorkloadInfoModule(unittest.TestCase):
                 self.assertEqual(len(workloads), 2)
                 self.assertTrue(all('production-' in w['name'] for w in workloads))
 
+    def test_workload_info_filter_by_s3_bucket(self):
+        mock_ansible_module = MagicMock()
+        mock_ansible_module.params = {
+            'name': None,
+            'workload_id': None,
+            'all_projects': False,
+            'project_id': None,
+            'detailed': True,
+            'nfs_share': None,
+            's3_bucket': 'company-openstack-backups',
+            'backup_target': None,
+            'backup_target_type': None
+        }
+
+        mock_client = MagicMock()
+        mock_client.list_workloads.return_value = [self.mock_workloads[1]]
+
+        with patch('ansible_collections.trilio.trilio_openstack.plugins.modules.workload_info.AnsibleModule', return_value=mock_ansible_module):
+            with patch('ansible_collections.trilio.trilio_openstack.plugins.modules.workload_info.TrilioClient', return_value=mock_client):
+                run_module()
+
+                mock_client.list_workloads.assert_called_once_with(
+                    project_id=None,
+                    all_projects=False,
+                    detailed=True,
+                    nfs_share=None,
+                    s3_bucket='company-openstack-backups',
+                    backup_target=None,
+                    backup_target_type=None
+                )
+                mock_ansible_module.exit_json.assert_called_once()
+                call_kwargs = mock_ansible_module.exit_json.call_args[1]
+                self.assertEqual(len(call_kwargs['workloads']), 1)
+                self.assertEqual(call_kwargs['workloads'][0]['name'], 'production-db')
+
+    def test_workload_info_filter_by_backup_target(self):
+        mock_ansible_module = MagicMock()
+        mock_ansible_module.params = {
+            'name': None,
+            'workload_id': None,
+            'all_projects': False,
+            'project_id': None,
+            'detailed': True,
+            'nfs_share': None,
+            's3_bucket': None,
+            'backup_target': '192.168.10.50:/var/nfs/trilio',
+            'backup_target_type': None
+        }
+
+        mock_client = MagicMock()
+        mock_client.list_workloads.return_value = [self.mock_workloads[0]]
+
+        with patch('ansible_collections.trilio.trilio_openstack.plugins.modules.workload_info.AnsibleModule', return_value=mock_ansible_module):
+            with patch('ansible_collections.trilio.trilio_openstack.plugins.modules.workload_info.TrilioClient', return_value=mock_client):
+                run_module()
+
+                mock_client.list_workloads.assert_called_once_with(
+                    project_id=None,
+                    all_projects=False,
+                    detailed=True,
+                    nfs_share=None,
+                    s3_bucket=None,
+                    backup_target='192.168.10.50:/var/nfs/trilio',
+                    backup_target_type=None
+                )
+                mock_ansible_module.exit_json.assert_called_once()
+                call_kwargs = mock_ansible_module.exit_json.call_args[1]
+                self.assertEqual(len(call_kwargs['workloads']), 1)
+                self.assertEqual(call_kwargs['workloads'][0]['id'], '7b47b4e8-8db9-4670-8b1e-0679815049cf')
+
     def test_workload_info_by_id(self):
         mock_ansible_module = MagicMock()
         mock_ansible_module.params = {
@@ -90,7 +175,10 @@ class TestWorkloadInfoModule(unittest.TestCase):
             'all_projects': False,
             'project_id': None,
             'detailed': True,
-            'nfs_share': None
+            'nfs_share': None,
+            's3_bucket': None,
+            'backup_target': None,
+            'backup_target_type': None
         }
 
         mock_client = MagicMock()
@@ -109,3 +197,4 @@ class TestWorkloadInfoModule(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

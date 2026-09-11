@@ -851,9 +851,16 @@ class TrilioClient:
             return res
         return []
 
-    def list_workloads(self, project_id=None, all_projects=False, detailed=True, nfs_share=None):
+    def list_workloads(self, project_id=None, all_projects=False, detailed=True,
+                       nfs_share=None, s3_bucket=None, backup_target=None,
+                       backup_target_type=None):
         """
         List workloads for a given project or all projects.
+        Supports filtering by storage destination:
+          - nfs_share: Upstream API-supported query parameter and client-side match
+          - s3_bucket: Filter workloads targeting a specific S3 bucket
+          - backup_target: Unified filter matching NFS share, S3 bucket, endpoint, or target name
+          - backup_target_type: Filter by Backup Target Type (BTT) name or UUID
         Target path: /v1/{project_id}/workloads/detail or /v1/{project_id}/workloads
         """
         target_project = project_id or self.project_id
@@ -875,11 +882,76 @@ class TrilioClient:
             params['nfs_share'] = nfs_share
 
         result = self.get(subpath, params=params)
+        workloads = []
         if isinstance(result, dict) and 'workloads' in result:
-            return result['workloads']
+            workloads = result['workloads']
         elif isinstance(result, list):
-            return result
-        return []
+            workloads = result
+
+        # Apply storage destination filtering (S3 bucket, NFS share, Backup Target, BTT)
+        if s3_bucket or backup_target or backup_target_type or nfs_share:
+            filtered = []
+            for wl in workloads:
+                storage_url = str(wl.get('storage_url') or '')
+                media_target = str(wl.get('backup_media_target') or '')
+                wl_btt = str(wl.get('backup_target_types') or wl.get('backup_target_type') or '')
+                metadata = wl.get('metadata') or {}
+                meta_btt = str(metadata.get('backup_target_types') or metadata.get('btt') or '')
+                meta_bucket = str(metadata.get('s3_bucket') or metadata.get('bucket') or '')
+
+                # Filter by s3_bucket
+                if s3_bucket:
+                    bucket_matched = (
+                        s3_bucket in storage_url or
+                        s3_bucket == media_target or
+                        s3_bucket in media_target or
+                        s3_bucket == meta_bucket or
+                        s3_bucket in meta_bucket
+                    )
+                    if not bucket_matched:
+                        continue
+
+                # Filter by nfs_share
+                if nfs_share:
+                    nfs_matched = (
+                        nfs_share == storage_url or
+                        nfs_share in storage_url or
+                        nfs_share == media_target or
+                        nfs_share in media_target
+                    )
+                    if not nfs_matched:
+                        continue
+
+                # Filter by backup_target_type (BTT name or UUID)
+                if backup_target_type:
+                    btt_matched = (
+                        backup_target_type == wl_btt or
+                        backup_target_type == meta_btt or
+                        backup_target_type in wl_btt or
+                        backup_target_type in meta_btt
+                    )
+                    if not btt_matched:
+                        continue
+
+                # Filter by generic backup_target
+                if backup_target:
+                    target_matched = (
+                        backup_target == storage_url or
+                        backup_target in storage_url or
+                        backup_target == media_target or
+                        backup_target in media_target or
+                        backup_target == wl_btt or
+                        backup_target == meta_btt or
+                        backup_target == meta_bucket or
+                        backup_target in meta_bucket
+                    )
+                    if not target_matched:
+                        continue
+
+                filtered.append(wl)
+            workloads = filtered
+
+        return workloads
 
     def get_workload(self, workload_id, project_id=None):
         """

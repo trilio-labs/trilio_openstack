@@ -186,6 +186,13 @@ Retrieves information, status, instance membership, and schedule details for Tri
 
 > **Note:** Also accessible via alias `trilio.trilio_openstack.trilio_workload_info`.
 
+### Target Storage Filtering (NFS & S3)
+While the upstream Trilio Workloadmgr REST API historically only exposed `nfs_share` as a server-side query parameter on the `/workloads` endpoint, the `workload_info` module provides comprehensive filtering across **both NFS and S3** backup targets:
+* **NFS Filtering (`nfs_share`)**: Passed directly to the upstream Trilio API query parameter for server-side filtering, and verified against workload `storage_url` and `backup_media_target`.
+* **S3 Filtering (`s3_bucket`)**: Filters workloads that store backups in the specified S3 bucket (inspecting `storage_url`, `backup_media_target`, and target metadata).
+* **Unified Target Filtering (`backup_target`)**: Matches against an NFS filesystem export path, an S3 bucket name, an S3 endpoint URL, or a Backup Target Type name/UUID.
+* **Backup Target Type Filtering (`backup_target_type` / `btt`)**: Filters workloads by their assigned Backup Target Type (BTT) name or UUID.
+
 ### Parameter Reference & Variables
 
 | Variable / Parameter | Type | Default | Choices / Aliases | Description |
@@ -196,7 +203,10 @@ Retrieves information, status, instance membership, and schedule details for Tri
 | `workload_id` | `str` | `None` | alias: `id` | Specific UUID of a workload to query. |
 | `all_projects` | `bool` | `false` | | Query workloads across all projects (admin privileges required). |
 | `detailed` | `bool` | `true` | | Return full details including VM lists, schedules, and storage URLs. |
-| `nfs_share` | `str` | `None` | | Filter workloads stored on a specific backup target NFS share. |
+| `nfs_share` | `str` | `None` | | Filter workloads stored on a specific backup target NFS share path. |
+| `s3_bucket` | `str` | `None` | | Filter workloads stored on a specific backup target S3 bucket. |
+| `backup_target` | `str` | `None` | | Unified filter matching an NFS share export path, S3 bucket name, or target name/UUID. |
+| `backup_target_type` | `str` | `None` | aliases: `btt`, `backup_target_types` | Filter workloads assigned to a specific Backup Target Type (BTT) name or UUID. |
 
 ---
 
