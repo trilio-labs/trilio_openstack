@@ -44,7 +44,7 @@ Understanding the separation of responsibilities between cloud administrators an
 | Persona / Role | Permitted Actions | Associated Modules & Playbooks |
 | :--- | :--- | :--- |
 | **Cloud Administrator** (`admin` role) | • Create, modify, and delete NFS and S3 Backup Targets via DMS.<br>• Create Backup Target Types (BTT) and assign project/tenant access.<br>• Manage infrastructure Barbican secrets for S3 backends.<br>• Query targets across the entire cloud (`all_projects: true`). | • `trilio.trilio_openstack.backup_target`<br>• `trilio.trilio_openstack.backup_target_info`<br>• `playbooks/create_backup_target_nfs.yml`<br>• `playbooks/create_backup_target_s3.yml` |
-| **End User / Tenant** (Project Member) | • Create, modify, and delete Workloads (protection plans).<br>• Choose which administrator-configured Backup Target Type (`backup_target_type`) to store backups on.<br>• Trigger on-demand full or incremental backups (snapshots) of protected workloads.<br>• Query workload details, snapshot history, and status within authorized projects. | • `trilio.trilio_openstack.workload`<br>• `trilio.trilio_openstack.workload_snapshot`<br>• `trilio.trilio_openstack.workload_info`<br>• `playbooks/create_workload.yml`<br>• `playbooks/backup_workload.yml` |
+| **End User / Tenant** (Project Member) | • Create, modify, and delete Workloads (protection plans).<br>• Choose which administrator-configured Backup Target Type (`backup_target_type`) to store backups on.<br>• Trigger on-demand full or incremental backups (snapshots) of protected workloads.<br>• Perform One-Click, In-Place, or Selective restores from snapshots.<br>• Query workload details, snapshot history, and restore status within authorized projects. | • `trilio.trilio_openstack.workload`<br>• `trilio.trilio_openstack.workload_snapshot`<br>• `trilio.trilio_openstack.workload_restore`<br>• `trilio.trilio_openstack.workload_info`<br>• `playbooks/create_workload.yml`<br>• `playbooks/backup_workload.yml`<br>• `playbooks/restore_workload.yml` |
 
 > [!IMPORTANT]
 > **Backup Target Creation is Admin-Only:** End users cannot create or mount new storage targets (`nfs` or `s3`). Administrators establish targets centrally and expose them to projects via Backup Target Types (BTT). End users then select which BTT to use when creating their workloads and initiating backups.
@@ -300,6 +300,152 @@ Creates and manages on-demand snapshots (backups) of Trilio for OpenStack worklo
 
 ---
 
+## Module Reference: `trilio.trilio_openstack.workload_restore`
+
+> **Access Level:** End User / Tenant (Project Member) or Cloud Administrator  
+> **Alias:** Also accessible via alias `trilio.trilio_openstack.trilio_workload_restore`.
+
+Performs and manages restores of OpenStack compute instances and storage volumes from Trilio snapshots. Provides complete automation for disaster recovery, staging/dev environment cloning, and volume rollbacks.
+
+### Restore Types Explained
+
+Trilio for OpenStack provides three primary restore methodologies to handle different recovery scenarios:
+
+| Restore Type | CLI / API Value | New Resources Created? | Primary Use Case & Behavior |
+| :--- | :--- | :--- | :--- |
+| **One-Click Restore** | `oneclick` / `one-click` | Yes | **Full Automated Recovery**: Restores the entire workload (all virtual machines, boot disks, volumes, and original network topology) exactly as it existed at the time of the snapshot. Designed as an "undo" button for disaster recovery. Requires original VMs to be absent or deleted. |
+| **In-Place Restore** | `inplace` / `in-place` | No | **Data Rollback Without Provisioning**: Overwrites existing volume and boot disk blocks in-place directly from the backup media. Does not create new virtual machines. Ideal for recovering from data corruption or rolling back database changes on running instances. |
+| **Selective Restore** | `selective` | Yes | **Granular / Customized Migration**: Allows granular selection of specific instances to recover, renaming instances, mapping snapshot networks and subnets to new target networks, changing volume types, overriding flavors, assigning availability zones, and preserving Nova server groups. Essential for staging/dev clones and cross-cloud or cross-network migrations. |
+
+### Parameter Reference & Variables
+
+| Variable / Parameter | Type | Default | Choices / Aliases | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `cloud` | `raw` | `None` | | Name of the cloud in `clouds.yaml`. |
+| `auth` | `dict` | `None` | `no_log: true` | Keystone authentication dictionary. |
+| `state` | `str` | `present` | `present`, `absent`, `cancelled` | Desired state. `present` triggers a restore; `absent` deletes an existing restore record; `cancelled` cancels an in-progress restore. |
+| `restore_type` | `str` | `oneclick` | `oneclick`, `one-click`, `inplace`, `in-place`, `selective` | Type of restore operation to execute. |
+| `snapshot` | `str` | `None` | aliases: `snapshot_id`, `id` | Name or UUID of the snapshot to restore from. Can be set to `latest` when `workload` is specified. |
+| `snapshot_name` | `str` | `None` | | Display name of the snapshot to restore from. |
+| `workload` | `str` | `None` | alias: `workload_id` | Name or UUID of the parent workload. If `snapshot` is omitted or `latest`, the module automatically selects the most recent available snapshot of this workload. |
+| `workload_name` | `str` | `None` | | Display name of the parent workload. |
+| `restore_id` | `str` | `None` | | UUID of an existing restore record. Required when `state=absent` or `state=cancelled`. |
+| `name` | `str` | `None` | alias: `restore_name` | Display name for the restore operation. Defaults to `<RestoreType> Restore` if omitted. |
+| `description` | `str` | `None` | alias: `restore_description` | Detailed explanation of the restore job. |
+| `instances` | `list[dict]` | `None` | | Instance-level mapping rules for In-Place or Selective restores (see table below). |
+| `restore_topology` | `bool` | `false` | | Whether to restore the network topology (routers, networks, subnets) in a selective restore. |
+| `networks_mapping` | `dict` | `None` | | Network mapping dictionary for selective restores, mapping snapshot networks and subnets to target networks. |
+| `options` | `dict` | `None` | alias: `restore_options` | Direct dictionary override for Trilio REST API restore options payload. |
+| `restore_file` | `path` | `None` | | Local path to a Trilio CLI `restore.json` configuration template file. |
+| `wait` | `bool` | `false` | | When `true`, blocks and polls status synchronously until the restore reaches `available`. |
+| `timeout` | `int` | `1200` | | Maximum timeout in seconds to wait for restore completion when `wait: true`. |
+| `poll_interval` | `int` | `10` | | Polling interval in seconds between status checks when `wait: true`. |
+| `project_id` | `str` | `None` | | Target OpenStack project UUID. Defaults to the authenticated project. |
+
+#### Instance Options in `instances` List
+
+* **For In-Place Restores (`restore_type: inplace`)**:
+  * `id` (`str`, required): UUID of the existing instance whose volumes will be overwritten.
+  * `include` (`bool`, default: `true`): Whether to include this instance in the restore.
+  * `restore_boot_disk` (`bool`, default: `true`): Whether to revert the root boot disk.
+  * `vdisks` (`list[dict]`, optional): List of attached cinder volumes with `id` (`str`) and `restore_cinder_volume` (`bool`).
+
+* **For Selective Restores (`restore_type: selective`)**:
+  * `id` (`str`, required): Original UUID of the instance captured in the snapshot.
+  * `name` (`str`, optional): New display name for the restored VM (e.g. `web-app-staging`).
+  * `include` (`bool`, default: `true`): Whether to restore this VM.
+  * `availability_zone` (`str`, optional): Target Nova availability zone.
+  * `server_group` (`str`, optional): UUID of an existing Nova server group on the target project to join.
+  * `flavor` (`dict`, optional): Dict specifying `id`, `vcpus`, `ram`, `disk`.
+  * `nics` (`list[dict]`, optional): List specifying network/subnet attachments or pre-created port IDs.
+  * `vdisks` (`list[dict]`, optional): List of volume configurations with `new_volume_type` and `availability_zone`.
+
+### Return Values
+
+| Return Key | Type | Description |
+| :--- | :--- | :--- |
+| `restore.id` | `str` | Unique UUID of the restore operation. |
+| `restore.name` | `str` | Display name of the restore job. |
+| `restore.snapshot_id` | `str` | UUID of the source snapshot. |
+| `restore.status` | `str` | Current status of the restore (e.g. `restoring`, `available`, `error`, `cancelled`). |
+| `restore.progress_percent` | `int` | Percent completion (0-100). |
+| `restore.created_at` | `str` | Timestamp when the restore was initiated. |
+| `restore.finished_at` | `str` | Timestamp when the restore completed (or `null` if still executing). |
+| `restore.restore_options` | `dict` | Full options payload processed by Trilio. |
+
+### Task Examples
+
+```yaml
+# 1. One-Click Restore of the latest snapshot of a workload
+- name: Disaster Recovery One-Click Rollback
+  trilio.trilio_openstack.workload_restore:
+    cloud: openstack
+    workload: production-web-cluster
+    restore_type: one-click
+    name: "Emergency Production Rollback"
+    wait: true
+    timeout: 1800
+
+# 2. In-Place Restore overwriting existing volumes
+- name: Revert database volumes in-place
+  trilio.trilio_openstack.workload_restore:
+    cloud: openstack
+    snapshot: "b41ad720-449e-4e67-9bf4-1d3820f1245a"
+    restore_type: in-place
+    name: "DB Corrupted Data Rollback"
+    instances:
+      - id: "46d8c0b5-7798-4c28-9844-3d0cfcf6bb3e"
+        restore_boot_disk: true
+        include: true
+        vdisks:
+          - id: "e63a18a5-d5bb-41bc-b271-9b19e99c8f07"
+            restore_cinder_volume: true
+    wait: true
+
+# 3. Selective Restore with instance renaming and network remapping
+- name: Clone production snapshot into staging environment
+  trilio.trilio_openstack.workload_restore:
+    cloud: openstack
+    snapshot: "b41ad720-449e-4e67-9bf4-1d3820f1245a"
+    restore_type: selective
+    name: "Staging Clone - Sprint 42"
+    restore_topology: false
+    instances:
+      - id: "46d8c0b5-7798-4c28-9844-3d0cfcf6bb3e"
+        name: "web-server-staging-01"
+        include: true
+        availability_zone: "nova"
+    networks_mapping:
+      networks:
+        - snapshot_network:
+            id: "5fb7027d-a2ac-4a21-9ee1-438c281d2b26"
+            subnet:
+              id: "b7b54304-aa82-4d50-91e6-66445ab56db4"
+          target_network:
+            id: "2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d"
+            name: "staging-network"
+            subnet:
+              id: "8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f"
+    wait: true
+
+# 4. Restore using an existing Trilio CLI restore.json file
+- name: Restore using existing CLI JSON template
+  trilio.trilio_openstack.workload_restore:
+    cloud: openstack
+    snapshot: "b41ad720-449e-4e67-9bf4-1d3820f1245a"
+    restore_file: "/etc/trilio/templates/restore.json"
+    wait: true
+
+# 5. Cancel an in-progress restore
+- name: Cancel running restore job
+  trilio.trilio_openstack.workload_restore:
+    cloud: openstack
+    state: cancelled
+    restore_id: "29fdc1f8-1d53-4a10-bb45-e539a64cdbfc"
+```
+
+---
+
 ## Playbook Workflows & Examples
 
 All example playbooks reside in the [`playbooks/`](playbooks/) directory:
@@ -489,6 +635,60 @@ ansible-playbook playbooks/backup_workload.yml
 > 2. Use JSON format: `-e '{"target_workload": "Production Workloads"}'`
 > 3. Use an environment variable: `export WORKLOAD_NAME="Production Workloads"`
 > 4. Run interactively and type the name at the prompt: `Enter Workload Name or UUID to back up []: Production Workloads`
+
+### 5. Restore Workload Snapshots (`playbooks/restore_workload.yml`)
+Executes an on-demand restore of an application workload or specific volumes from a Trilio snapshot.
+
+#### Key Capabilities
+* **Three Restore Types Supported**: Choose between `one-click` (full automated recovery), `in-place` (data rollback on existing volumes), or `selective` (granular instance/network/volume mapping).
+* **Target by Workload or Snapshot**: Pass a snapshot UUID directly (`-e target_snapshot=...`) or pass a workload name/UUID (`-e target_workload=...`), which automatically locates the latest available snapshot of that workload.
+* **CLI JSON File Compatible**: Operators with pre-existing Trilio CLI `restore.json` templates can supply the file path directly using `-e restore_file=/path/to/restore.json`.
+* **Interactive Prompting (`vars_prompt`)**: Prompts for the target workload/snapshot and restore type if executed interactively without CLI flags.
+* **Synchronous Completion by Default**: Restores default to blocking execution (`wait_for_completion: true`, timeout 1200s) to guarantee the environment is verified before subsequent tasks run.
+
+#### Variable Reference & Documentation
+
+| Variable Name | Source / Aliases | Type | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `target_workload` | `workload`, `workload_name`, `WORKLOAD_NAME` | `str` | *Interactive prompt* | Name or UUID of the parent workload. If specified without a snapshot, resolves the latest available snapshot. |
+| `target_snapshot` | `snapshot`, `snapshot_id`, `SNAPSHOT_ID` | `str` | *Interactive prompt* | Direct UUID or name of the snapshot to restore from. |
+| `restore_type` | `RESTORE_TYPE` | `str` | `one-click` | Recovery mode: `one-click` (full recovery), `in-place` (volume overwrite), or `selective` (granular mapping). |
+| `restore_name` | `RESTORE_NAME` | `str` | `<Type> Restore` | Display name for the restore operation in Trilio. |
+| `restore_description` | `RESTORE_DESCRIPTION` | `str` | `On-demand restore initiated via Ansible` | Textual description explaining the reason for the restore. |
+| `restore_file` | `RESTORE_FILE` | `path` | `None` | Path to a local JSON file formatted according to Trilio CLI `restore.json` schema. |
+| `wait_for_completion` | `wait`, `WAIT_FOR_COMPLETION` | `bool` | `true` | When `true`, waits synchronously until the restore reaches `available`. When `false`, returns immediately after queuing. |
+| `wait_timeout` | `timeout`, `WAIT_TIMEOUT` | `int` | `1200` | Maximum wait timeout in seconds when `wait_for_completion=true`. |
+| `cloud_name` | `OS_CLOUD` | `str` | `openstack` | Named cloud entry in `clouds.yaml`. |
+
+#### CLI Usage Examples
+
+```bash
+# 1. Interactive prompt (prompts for workload/snapshot, defaults to one-click):
+ansible-playbook playbooks/restore_workload.yml
+
+# 2. One-Click restore of latest snapshot of a workload:
+ansible-playbook playbooks/restore_workload.yml \
+  -e target_workload=production-web-cluster \
+  -e restore_type=one-click
+
+# 3. In-Place volume rollback from a specific snapshot UUID:
+ansible-playbook playbooks/restore_workload.yml \
+  -e target_snapshot=b41ad720-449e-4e67-9bf4-1d3820f1245a \
+  -e restore_type=in-place
+
+# 4. Selective restore using an existing restore.json template:
+ansible-playbook playbooks/restore_workload.yml \
+  -e target_snapshot=b41ad720-449e-4e67-9bf4-1d3820f1245a \
+  -e restore_type=selective \
+  -e restore_file=/etc/trilio/templates/staging_restore.json
+
+# 5. Non-interactive via environment variables:
+export OS_CLOUD=openstack
+export WORKLOAD_NAME="production-web-cluster"
+export RESTORE_TYPE=one-click
+export WAIT_FOR_COMPLETION=true
+ansible-playbook playbooks/restore_workload.yml
+```
 
 ---
 

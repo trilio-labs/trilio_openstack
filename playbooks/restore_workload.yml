@@ -1,0 +1,134 @@
+---
+# Playbook: Restore a Trilio Workload Snapshot (One-Click, In-Place, or Selective)
+#
+# Persona & Access:
+# - End-user / Tenant operation: Project members restore application workloads
+#   or virtual machine volumes from previous snapshot backups.
+# - Cloud administrators can also trigger restores on behalf of any project.
+#
+# Execution Modes:
+# 1. Interactive Execution (vars_prompt):
+#    Prompts for the target workload or snapshot and restore option.
+#    Default restore type is 'one-click'.
+# 2. Automated / CI/CD Execution:
+#    Provide variables via extra vars (-e target_workload=... -e restore_type=...)
+#    or environment variables (WORKLOAD_NAME, SNAPSHOT_ID, RESTORE_TYPE).
+#    Passing extra vars automatically bypasses the interactive prompt.
+#
+# Restore Types:
+# - one-click: Automated full workload recovery to original configuration.
+# - in-place: Overwrites existing volume data without creating new instances.
+# - selective: Granular restore with custom instance/volume/network mappings.
+#
+# Usage Examples:
+#   # Interactive (prompts for workload/snapshot, defaults to one-click):
+#   ansible-playbook playbooks/restore_workload.yml
+#
+#   # Non-interactive One-Click Restore of latest snapshot:
+#   ansible-playbook playbooks/restore_workload.yml \
+#     -e target_workload=production-web-cluster \
+#     -e restore_type=one-click \
+#     -e wait_for_completion=true
+#
+#   # Non-interactive In-Place Restore of a specific snapshot:
+#   ansible-playbook playbooks/restore_workload.yml \
+#     -e target_snapshot=b41ad720-449e-4e67-9bf4-1d3820f1245a \
+#     -e restore_type=in-place \
+#     -e wait_for_completion=true
+#
+#   # Selective Restore using an existing restore.json template file:
+#   ansible-playbook playbooks/restore_workload.yml \
+#     -e target_snapshot=b41ad720-449e-4e67-9bf4-1d3820f1245a \
+#     -e restore_file=/etc/trilio/templates/restore.json \
+#     -e wait_for_completion=true
+#
+- name: Perform Trilio Workload Restore
+  hosts: localhost
+  gather_facts: false
+
+  vars_prompt:
+    - name: target_identifier
+      prompt: "Enter Workload Name, Workload UUID, or Snapshot UUID to restore from"
+      private: false
+      default: "{{ lookup('ansible.builtin.env', 'SNAPSHOT_ID') | default(lookup('ansible.builtin.env', 'WORKLOAD_NAME', default=''), true) }}"
+
+    - name: selected_restore_type
+      prompt: "Select restore type ('one-click', 'in-place', 'selective')"
+      private: false
+      default: "one-click"
+
+  vars:
+    cloud_name: "{{ lookup('ansible.builtin.env', 'OS_CLOUD') | default('openstack', true) }}"
+
+    # Target snapshot or workload identifier
+    target_snapshot_param: "{{ target_snapshot | default(snapshot | default(snapshot_id | default('', true), true), true) | trim }}"
+    target_workload_param: "{{ target_workload | default(workload | default(workload_name | default(workload_id | default('', true), true), true), true) | trim }}"
+
+    # Fallback to prompt if neither CLI parameter provided
+    resolved_target: "{{ target_snapshot_param if (target_snapshot_param | length > 0) else (target_workload_param if (target_workload_param | length > 0) else target_identifier) | trim }}"
+
+    # Restore type normalization (oneclick, inplace, selective)
+    resolved_restore_type: "{{ (restore_type | default(selected_restore_type, true) | default('one-click', true)) | lower | replace('-', '') | replace('_', '') | trim }}"
+
+    # Optional restore name and description
+    custom_restore_name: "{{ restore_name | default(lookup('ansible.builtin.env', 'RESTORE_NAME', default=''), true) | default(omit, true) }}"
+    custom_restore_description: "{{ restore_description | default(lookup('ansible.builtin.env', 'RESTORE_DESCRIPTION', default='On-demand restore initiated via Ansible'), true) }}"
+
+    # Optional restore.json configuration file path
+    resolved_restore_file: "{{ restore_file | default(lookup('ansible.builtin.env', 'RESTORE_FILE', default=''), true) | default(omit, true) }}"
+
+    # Wait for completion (default: true for restores to ensure recovery completes)
+    wait_for_completion: "{{ (wait | default(lookup('ansible.builtin.env', 'WAIT_FOR_COMPLETION', default=true))) | bool }}"
+    wait_timeout: "{{ (timeout | default(lookup('ansible.builtin.env', 'WAIT_TIMEOUT', default=1200))) | int }}"
+
+  tasks:
+    - name: 1. Validate required inputs
+      ansible.builtin.assert:
+        that:
+          - resolved_target | length > 0
+          - resolved_restore_type in ['oneclick', 'inplace', 'selective']
+        fail_msg: >-
+          Validation failed: A valid workload or snapshot identifier is required, and restore_type
+          must be 'one-click', 'in-place', or 'selective' (received target='{{ resolved_target }}',
+          restore_type='{{ resolved_restore_type }}').
+
+    - name: 2. Display restore operation overview
+      ansible.builtin.debug:
+        msg:
+          - "Target Identifier: {{ resolved_target }}"
+          - "Restore Type:      {{ resolved_restore_type | upper }}"
+          - "Synchronous Wait:  {{ wait_for_completion }} (Timeout: {{ wait_timeout }}s)"
+          - "Config File:       {{ resolved_restore_file if resolved_restore_file is not none else 'None (using defaults/parameters)' }}"
+
+    - name: 3. Trigger workload snapshot restore
+      trilio.trilio_openstack.workload_restore:
+        cloud: "{{ cloud_name }}"
+        snapshot: "{{ resolved_target }}"
+        workload: "{{ resolved_target }}"
+        restore_type: "{{ resolved_restore_type }}"
+        name: "{{ custom_restore_name | default(omit) }}"
+        description: "{{ custom_restore_description }}"
+        restore_file: "{{ resolved_restore_file | default(omit) }}"
+        instances: "{{ instances | default(omit) }}"
+        restore_topology: "{{ restore_topology | default(omit) }}"
+        networks_mapping: "{{ networks_mapping | default(omit) }}"
+        options: "{{ restore_options | default(options | default(omit)) }}"
+        wait: "{{ wait_for_completion }}"
+        timeout: "{{ wait_timeout }}"
+      register: restore_result
+
+    - name: 4. Display restore execution summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "             TRILIO RESTORE SUMMARY                         "
+          - "============================================================"
+          - "Restore ID:     {{ restore_result.restore.id }}"
+          - "Restore Name:   {{ restore_result.restore.name }}"
+          - "Restore Type:   {{ resolved_restore_type | upper }}"
+          - "Snapshot ID:    {{ restore_result.restore.snapshot_id }}"
+          - "Status:         {{ restore_result.restore.status }}"
+          - "Progress:       {{ restore_result.restore.progress_percent | default(0) }}%"
+          - "Started At:     {{ restore_result.restore.created_at | default('N/A') }}"
+          - "Finished At:    {{ restore_result.restore.finished_at | default('In progress' if restore_result.restore.status == 'restoring' else 'Completed') }}"
+          - "============================================================"

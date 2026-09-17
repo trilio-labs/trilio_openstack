@@ -2,9 +2,29 @@
 requires_ansible: '>=2.9.0'
 action_groups:
   trilio:
+    - backup_target
+    - trilio_backup_target
+    - backup_target_info
+    - trilio_backup_target_info
+    - workload
+    - trilio_workload
     - workload_info
     - trilio_workload_info
+    - workload_snapshot
+    - trilio_workload_snapshot
+    - workload_restore
+    - trilio_workload_restore
 plugin_routing:
   modules:
+    trilio_backup_target:
+      redirect: trilio.trilio_openstack.backup_target
+    trilio_backup_target_info:
+      redirect: trilio.trilio_openstack.backup_target_info
+    trilio_workload:
+      redirect: trilio.trilio_openstack.workload
     trilio_workload_info:
       redirect: trilio.trilio_openstack.workload_info
+    trilio_workload_snapshot:
+      redirect: trilio.trilio_openstack.workload_snapshot
+    trilio_workload_restore:
+      redirect: trilio.trilio_openstack.workload_restore

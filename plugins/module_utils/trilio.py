@@ -1218,5 +1218,212 @@ class TrilioClient:
 
         return self.delete(subpath)
 
+    def create_restore(self, snapshot_id, restore_type='oneclick', name=None, description=None, options=None, project_id=None):
+        """
+        Initiate a restore of a snapshot (POST /v1/{project_id}/snapshots/{snapshot_id}).
+        Supports one-click, in-place, and selective restores.
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/snapshots/%s' % snapshot_id
+        else:
+            subpath = '/v1/%s/snapshots/%s' % (target_project, snapshot_id)
+
+        # Normalize restore_type
+        r_type = (restore_type or 'oneclick').lower().replace('-', '')
+        if r_type in ('oneclick', 'one_click'):
+            norm_type = 'oneclick'
+        elif r_type in ('inplace', 'in_place'):
+            norm_type = 'inplace'
+        elif r_type in ('selective',):
+            norm_type = 'selective'
+        else:
+            norm_type = r_type
+
+        # Build options dictionary
+        opts = dict(options or {})
+        if 'type' not in opts:
+            opts['type'] = 'openstack'
+        if 'restore_type' not in opts:
+            opts['restore_type'] = norm_type
+        if 'oneclickrestore' not in opts:
+            opts['oneclickrestore'] = (norm_type == 'oneclick')
+        if 'openstack' not in opts:
+            opts['openstack'] = {}
+
+        restore_name = name or ("%s Restore" % ('OneClick' if norm_type == 'oneclick' else ('Inplace' if norm_type == 'inplace' else 'Selective')))
+        restore_desc = description or ("%s restore triggered via Ansible" % norm_type.capitalize())
+
+        payload = {
+            'restore': {
+                'name': restore_name,
+                'description': restore_desc,
+                'options': opts
+            }
+        }
+
+        res = self.post(subpath, json_data=payload)
+        if isinstance(res, dict) and 'restore' in res:
+            return res['restore']
+        return res
+
+    def get_restore(self, restore_id, project_id=None):
+        """
+        Retrieve details of a restore by UUID (GET /v1/{project_id}/restores/{restore_id}).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/restores/%s' % restore_id
+        else:
+            subpath = '/v1/%s/restores/%s' % (target_project, restore_id)
+
+        res = self.get(subpath)
+        if isinstance(res, dict) and 'restore' in res:
+            return res['restore']
+        return res
+
+    def list_restores(self, snapshot_id=None, detailed=True, project_id=None):
+        """
+        List restores, optionally filtered by snapshot UUID (GET /v1/{project_id}/restores/detail).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        detail_path = '/restores/detail' if detailed else '/restores'
+        if endpoint_has_project:
+            subpath = detail_path
+        else:
+            subpath = '/v1/%s%s' % (target_project, detail_path)
+
+        params = {}
+        if snapshot_id:
+            params['snapshot_id'] = snapshot_id
+
+        res = self.get(subpath, params=params if params else None)
+        if isinstance(res, dict) and 'restores' in res:
+            return res['restores']
+        elif isinstance(res, list):
+            return res
+        return []
+
+    def wait_for_restore(self, restore_id, target_status='available', timeout=1200, poll_interval=10, project_id=None):
+        """
+        Wait synchronously until a restore reaches the desired status (default: 'available').
+        """
+        import time
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            restore_data = self.get_restore(restore_id, project_id=project_id)
+            status = restore_data.get('status', '').lower() if isinstance(restore_data, dict) else ''
+            if status == target_status.lower():
+                return restore_data
+            elif status in ('error', 'failed'):
+                err_msg = restore_data.get('error_msg') or restore_data.get('warning_msg') or 'Restore entered error state'
+                self.module.fail_json(
+                    msg="Restore '%s' failed with status '%s': %s" % (restore_id, status, err_msg),
+                    restore=restore_data
+                )
+            elif status in ('cancelled', 'deleted'):
+                self.module.fail_json(
+                    msg="Restore '%s' was %s." % (restore_id, status),
+                    restore=restore_data
+                )
+            time.sleep(poll_interval)
+
+        self.module.fail_json(
+            msg="Timeout waiting for restore '%s' to reach status '%s' after %d seconds." % (restore_id, target_status, timeout)
+        )
+
+    def delete_restore(self, restore_id, project_id=None):
+        """
+        Delete a restore record by UUID (DELETE /v1/{project_id}/restores/{restore_id}).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/restores/%s' % restore_id
+        else:
+            subpath = '/v1/%s/restores/%s' % (target_project, restore_id)
+
+        return self.delete(subpath)
+
+    def cancel_restore(self, restore_id, project_id=None):
+        """
+        Cancel an in-progress restore (GET /v1/{project_id}/restores/{restore_id}/cancel).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/restores/%s/cancel' % restore_id
+        else:
+            subpath = '/v1/%s/restores/%s/cancel' % (target_project, restore_id)
+
+        return self.get(subpath)
+
+    def resolve_snapshot(self, snapshot_identifier=None, workload_identifier=None, project_id=None):
+        """
+        Helper method to resolve a snapshot object given a snapshot UUID, snapshot name,
+        or a workload identifier (resolving the latest available snapshot).
+        """
+        # If snapshot identifier is provided and is a UUID
+        if snapshot_identifier and snapshot_identifier.lower() != 'latest':
+            is_uuid = bool(re.match(r'^[0-9a-fA-F-]{36}$', snapshot_identifier) or re.match(r'^[0-9a-fA-F]{32}$', snapshot_identifier))
+            if is_uuid:
+                snap = self.get_snapshot(snapshot_identifier, project_id=project_id)
+                if snap:
+                    return snap
+
+        # If workload identifier is provided, find the workload first
+        target_workload_id = None
+        if workload_identifier:
+            is_wl_uuid = bool(re.match(r'^[0-9a-fA-F-]{36}$', workload_identifier) or re.match(r'^[0-9a-fA-F]{32}$', workload_identifier))
+            if is_wl_uuid:
+                target_workload_id = workload_identifier
+            else:
+                wl = self.get_workload_by_name(workload_identifier, project_id=project_id)
+                if wl:
+                    target_workload_id = wl.get('id')
+
+        # List snapshots (scoped to workload if known)
+        snaps = self.list_snapshots(workload_id=target_workload_id, project_id=project_id)
+
+        # If snapshot_identifier is given and not 'latest', look by name
+        if snapshot_identifier and snapshot_identifier.lower() != 'latest':
+            for s in snaps:
+                if s.get('name') == snapshot_identifier or s.get('display_name') == snapshot_identifier:
+                    return s
+                if s.get('id') == snapshot_identifier:
+                    return s
+            return None
+
+        # Otherwise (or if 'latest' requested), find latest available snapshot
+        available_snaps = [s for s in snaps if s.get('status') == 'available']
+        if not available_snaps:
+            return None
+
+        # Sort by created_at descending
+        try:
+            available_snaps.sort(key=lambda s: s.get('created_at') or '', reverse=True)
+        except Exception:
+            pass
+
+        return available_snaps[0]
+
 
 

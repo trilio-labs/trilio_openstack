@@ -332,6 +332,137 @@ class TestTrilioModuleUtils(unittest.TestCase):
                     res = client.wait_for_snapshot('snap-1', target_status='available', timeout=10, poll_interval=1)
                     self.assertEqual(res['status'], 'available')
 
+    def test_create_restore_oneclick(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            mock_restore = {'id': 'restore-1', 'status': 'restoring', 'name': 'OneClick Restore'}
+            with patch.object(client, 'post', return_value={'restore': mock_restore}) as mock_post:
+                res = client.create_restore('snap-uuid-1', restore_type='oneclick')
+                self.assertEqual(res['id'], 'restore-1')
+                mock_post.assert_called_once_with(
+                    '/v1/proj-123/snapshots/snap-uuid-1',
+                    json_data={
+                        'restore': {
+                            'name': 'OneClick Restore',
+                            'description': 'Oneclick restore triggered via Ansible',
+                            'options': {
+                                'type': 'openstack',
+                                'restore_type': 'oneclick',
+                                'oneclickrestore': True,
+                                'openstack': {}
+                            }
+                        }
+                    }
+                )
+
+    def test_create_restore_inplace(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            mock_restore = {'id': 'restore-2', 'status': 'restoring', 'name': 'Inplace Restore'}
+            custom_options = {
+                'openstack': {
+                    'instances': [{'id': 'inst-1', 'include': True, 'restore_boot_disk': True}]
+                }
+            }
+            with patch.object(client, 'post', return_value={'restore': mock_restore}) as mock_post:
+                res = client.create_restore('snap-uuid-1', restore_type='inplace', options=custom_options)
+                self.assertEqual(res['id'], 'restore-2')
+                mock_post.assert_called_once_with(
+                    '/v1/proj-123/snapshots/snap-uuid-1',
+                    json_data={
+                        'restore': {
+                            'name': 'Inplace Restore',
+                            'description': 'Inplace restore triggered via Ansible',
+                            'options': {
+                                'type': 'openstack',
+                                'restore_type': 'inplace',
+                                'oneclickrestore': False,
+                                'openstack': {
+                                    'instances': [{'id': 'inst-1', 'include': True, 'restore_boot_disk': True}]
+                                }
+                            }
+                        }
+                    }
+                )
+
+    def test_get_and_list_restores(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            with patch.object(client, 'get', return_value={'restore': {'id': 'restore-123', 'status': 'available'}}) as mock_get:
+                res = client.get_restore('restore-123')
+                self.assertEqual(res['id'], 'restore-123')
+                mock_get.assert_called_once_with('/v1/proj-123/restores/restore-123')
+
+            with patch.object(client, 'get', return_value={'restores': [{'id': 'restore-123'}]}) as mock_get:
+                res = client.list_restores(snapshot_id='snap-abc')
+                self.assertEqual(len(res), 1)
+                mock_get.assert_called_once_with('/v1/proj-123/restores/detail', params={'snapshot_id': 'snap-abc'})
+
+    def test_delete_and_cancel_restore(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            with patch.object(client, 'delete', return_value={'message': 'deleted'}) as mock_del:
+                client.delete_restore('restore-123')
+                mock_del.assert_called_once_with('/v1/proj-123/restores/restore-123')
+
+            with patch.object(client, 'get', return_value={'message': 'cancelled'}) as mock_get:
+                client.cancel_restore('restore-123')
+                mock_get.assert_called_once_with('/v1/proj-123/restores/restore-123/cancel')
+
+    def test_wait_for_restore(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+            with patch.object(client, 'get_restore', side_effect=[
+                {'id': 'restore-1', 'status': 'restoring'},
+                {'id': 'restore-1', 'status': 'available'}
+            ]):
+                with patch('time.sleep', return_value=None):
+                    res = client.wait_for_restore('restore-1', target_status='available', timeout=10, poll_interval=1)
+                    self.assertEqual(res['status'], 'available')
+
+    def test_resolve_snapshot(self):
+        module = MagicMock()
+        module.params = {'trilio_endpoint': 'http://tvm.internal:8780', 'validate_certs': True, 'timeout': 30}
+        with patch.object(TrilioClient, '_authenticate', return_value=None):
+            client = TrilioClient(module)
+            client.endpoint = 'http://tvm.internal:8780'
+            client.project_id = 'proj-123'
+
+            # 1. Resolve by UUID directly
+            with patch.object(client, 'get_snapshot', return_value={'id': 'b41ad720-449e-4e67-9bf4-1d3820f1245a'}):
+                snap = client.resolve_snapshot(snapshot_identifier='b41ad720-449e-4e67-9bf4-1d3820f1245a')
+                self.assertEqual(snap['id'], 'b41ad720-449e-4e67-9bf4-1d3820f1245a')
+
+            # 2. Resolve latest available snapshot of workload
+            with patch.object(client, 'get_workload_by_name', return_value={'id': 'wl-uuid-1'}):
+                with patch.object(client, 'list_snapshots', return_value=[
+                    {'id': 'snap-old', 'status': 'available', 'created_at': '2026-09-01T10:00:00'},
+                    {'id': 'snap-new', 'status': 'available', 'created_at': '2026-09-10T10:00:00'},
+                    {'id': 'snap-err', 'status': 'error', 'created_at': '2026-09-15T10:00:00'},
+                ]):
+                    snap = client.resolve_snapshot(workload_identifier='my-workload', snapshot_identifier='latest')
+                    self.assertEqual(snap['id'], 'snap-new')
+
 
 if __name__ == '__main__':
     unittest.main()
