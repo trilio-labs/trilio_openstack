@@ -43,7 +43,7 @@ Understanding the separation of responsibilities between cloud administrators an
 
 | Persona / Role | Permitted Actions | Associated Modules & Playbooks |
 | :--- | :--- | :--- |
-| **Cloud Administrator** (`admin` role) | • Create, modify, and delete NFS and S3 Backup Targets via DMS.<br>• Create Backup Target Types (BTT) and assign project/tenant access.<br>• Manage infrastructure Barbican secrets for S3 backends.<br>• Query targets across the entire cloud (`all_projects: true`). | • `trilio.trilio_openstack.backup_target`<br>• `trilio.trilio_openstack.backup_target_info`<br>• `playbooks/create_backup_target_nfs.yml`<br>• `playbooks/create_backup_target_s3.yml` |
+| **Cloud Administrator** (`admin` role) | • Create, modify, and delete NFS and S3 Backup Targets via DMS.<br>• Create Backup Target Types (BTT) and assign project/tenant access.<br>• Manage infrastructure Barbican secrets for S3 backends.<br>• Query targets across the entire cloud (`all_projects: true`).<br>• Reassign workloads and backup chains across tenants/users. | • `trilio.trilio_openstack.backup_target`<br>• `trilio.trilio_openstack.backup_target_info`<br>• `trilio.trilio_openstack.workload_reassign`<br>• `playbooks/create_backup_target_nfs.yml`<br>• `playbooks/create_backup_target_s3.yml` |
 | **End User / Tenant** (Project Member) | • Create, modify, and delete Workloads (protection plans).<br>• Choose which administrator-configured Backup Target Type (`backup_target_type`) to store backups on.<br>• Trigger on-demand full or incremental backups (snapshots) of protected workloads.<br>• Perform One-Click, In-Place, or Selective restores from snapshots.<br>• Query workload details, snapshot history, and restore status within authorized projects. | • `trilio.trilio_openstack.workload`<br>• `trilio.trilio_openstack.workload_snapshot`<br>• `trilio.trilio_openstack.workload_restore`<br>• `trilio.trilio_openstack.workload_info`<br>• `playbooks/create_workload.yml`<br>• `playbooks/backup_workload.yml`<br>• `playbooks/restore_workload.yml` |
 
 > [!IMPORTANT]
@@ -442,6 +442,75 @@ Trilio for OpenStack provides three primary restore methodologies to handle diff
     cloud: openstack
     state: cancelled
     restore_id: "29fdc1f8-1d53-4a10-bb45-e539a64cdbfc"
+```
+
+---
+
+## Module Reference: `trilio.trilio_openstack.workload_reassign`
+
+> **Access Level:** **Administrator Only (`admin` role)**. Reassigning workloads across projects/tenants and users is reserved for cloud administrators.
+
+> **Alias:** Also accessible via alias `trilio.trilio_openstack.trilio_workload_reassign`.
+
+Reassigns ownership of one or more Trilio workloads and their associated backup snapshot chains from a source OpenStack project (tenant) to a target tenant and user. Enables cross-tenant workload migration, tenant consolidation, and project lifecycle management.
+
+### Parameter Reference & Variables
+
+| Variable / Parameter | Type | Default | Choices / Aliases | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `target_project` | `str` | **Required** | `new_tenant_id`, `target_tenant`, `destination_project`, `destination_tenant` | Name or UUID of the destination OpenStack project (tenant). |
+| `target_user` | `str` | **Required** | `user_id`, `user`, `destination_user` | Name or UUID of the OpenStack user within the destination project who will own the workload. |
+| `workload` | `str` | `None` | `workload_id`, `id` | Name or UUID of a single workload to reassign. |
+| `workload_ids` | `list` | `None` | | List of workload names or UUIDs to reassign. |
+| `workload_name` | `str` | `None` | | Explicit display name of the workload to reassign. |
+| `source_project` | `str` | `None` | `old_tenant_id`, `source_tenant`, `old_tenant_ids` | Name or UUID of the original source OpenStack project. |
+| `source_btt` | `raw` | `None` | `source_btt_id`, `source_backup_target_type` | Name or UUID of the source Backup Target Type (BTT). |
+| `target_btt` | `str` | `None` | `target_btt_id`, `target_backup_target_type` | Name or UUID of the target Backup Target Type (BTT). |
+| `migrate_storage` | `bool` | `false` | | Whether to physically migrate backup storage data to a new target backend. |
+| `cloud` | `raw` | `None` | | Named cloud in `clouds.yaml` or cloud configuration dictionary. |
+| `auth` | `dict` | `None` | `no_log: true` | Keystone authentication credentials dictionary. |
+| `validate_certs` | `bool` | `true` | alias: `verify` | Whether to validate SSL/TLS certificates. |
+| `timeout` | `int` | `180` | | HTTP request timeout in seconds. |
+
+### Return Values
+
+| Return Field | Type | Description |
+| :--- | :--- | :--- |
+| `workloads` | `list/dict` | Reassigned workloads returned by the Trilio Workload Manager API. |
+| `target_project_id` | `str` | Resolved UUID of the target OpenStack project. |
+| `target_user_id` | `str` | Resolved UUID of the target OpenStack user. |
+| `changed` | `bool` | Whether the reassignment was performed. |
+
+### Task Examples
+
+```yaml
+# 1. Reassign workload to a new project and user using friendly names
+- name: Reassign Fileserver Backup to restore tenant
+  trilio.trilio_openstack.workload_reassign:
+    cloud: admin
+    workload: "Fileserver Backup"
+    target_project: "kevin-restore"
+    target_user: "kevin"
+    source_btt: "d11516df-be26-4587-aa30-5bd9a4c9c247"
+
+# 2. Reassign multiple workloads by UUID
+- name: Batch reassign workloads
+  trilio.trilio_openstack.workload_reassign:
+    cloud: admin
+    workload_ids:
+      - "46d8c0b5-7798-4c28-9844-3d0cfcf6bb3e"
+      - "7b47b4e8-8db9-4670-8b1e-0679815049cf"
+    target_project: "a8f3b0e1-9c2d-4e5f-8a1b-3c5d7e9f0a2b"
+    target_user: "f4e2d0c8-1b3a-4f5e-9a7c-8d6b5a4c3e2f"
+    source_project: "b9e4a1f2-0d3c-4e5b-8f7a-2c4e6d8a0b1c"
+
+# 3. Reassign workload back to original source project (Reset)
+- name: Reassign workload back to source tenant
+  trilio.trilio_openstack.workload_reassign:
+    cloud: admin
+    workload: "Fileserver Backup"
+    target_project: "kevin-demo"
+    target_user: "kevin"
 ```
 
 ---

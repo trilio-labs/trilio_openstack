@@ -1434,3 +1434,125 @@ class TrilioClient:
             pass
 
         return available_snaps[0]
+
+    def find_project_id(self, project_identifier):
+        """
+        Resolve an OpenStack project name or UUID to its project UUID.
+        """
+        if not project_identifier:
+            return None
+        is_uuid = bool(re.match(r'^[0-9a-fA-F-]{36}$', str(project_identifier)) or re.match(r'^[0-9a-fA-F]{32}$', str(project_identifier)))
+        if is_uuid:
+            return project_identifier
+
+        if self.conn and hasattr(self.conn, 'identity'):
+            try:
+                proj = self.conn.identity.find_project(project_identifier, ignore_missing=True)
+                if proj and getattr(proj, 'id', None):
+                    return proj.id
+            except Exception:
+                pass
+            try:
+                if hasattr(self.conn, 'get_project'):
+                    proj = self.conn.get_project(project_identifier)
+                    if proj and getattr(proj, 'id', None):
+                        return proj.id
+            except Exception:
+                pass
+        return project_identifier
+
+    def find_user_id(self, user_identifier):
+        """
+        Resolve an OpenStack user name or UUID to its user UUID.
+        """
+        if not user_identifier:
+            return None
+        is_uuid = bool(re.match(r'^[0-9a-fA-F-]{36}$', str(user_identifier)) or re.match(r'^[0-9a-fA-F]{32}$', str(user_identifier)))
+        if is_uuid:
+            return user_identifier
+
+        if self.conn and hasattr(self.conn, 'identity'):
+            try:
+                usr = self.conn.identity.find_user(user_identifier, ignore_missing=True)
+                if usr and getattr(usr, 'id', None):
+                    return usr.id
+            except Exception:
+                pass
+            try:
+                if hasattr(self.conn, 'get_user'):
+                    usr = self.conn.get_user(user_identifier)
+                    if usr and getattr(usr, 'id', None):
+                        return usr.id
+            except Exception:
+                pass
+        return user_identifier
+
+    def reassign_workloads(self, workload_ids, new_tenant_id, user_id,
+                           old_tenant_ids=None, source_btt=None, target_btt=None,
+                           migrate_storage=False, project_id=None):
+        """
+        Reassign workloads to a new tenant/user (POST /workloads/reassign_workloads).
+        """
+        target_project = project_id or self.project_id
+        if not target_project:
+            self.module.fail_json(msg="No OpenStack project ID available.")
+
+        endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
+        if endpoint_has_project:
+            subpath = '/workloads/reassign_workloads'
+        else:
+            subpath = '/v1/%s/workloads/reassign_workloads' % target_project
+
+        if isinstance(workload_ids, (str, bytes)):
+            workload_ids = [workload_ids]
+
+        resolved_workload_ids = []
+        for wl in workload_ids:
+            if not wl:
+                continue
+            is_uuid = bool(re.match(r'^[0-9a-fA-F-]{36}$', str(wl)) or re.match(r'^[0-9a-fA-F]{32}$', str(wl)))
+            if is_uuid:
+                resolved_workload_ids.append(str(wl))
+            else:
+                found_wl = self.get_workload_by_name(wl, project_id=project_id)
+                if not found_wl:
+                    # Try finding across all projects if admin
+                    found_wls = self.list_workloads(all_projects=True)
+                    for w in found_wls:
+                        if w.get('name') == wl or w.get('display_name') == wl:
+                            found_wl = w
+                            break
+                if found_wl:
+                    resolved_workload_ids.append(found_wl.get('id'))
+                else:
+                    resolved_workload_ids.append(str(wl))
+
+        resolved_target_project = self.find_project_id(new_tenant_id)
+        resolved_user_id = self.find_user_id(user_id)
+
+        body = {
+            "workload_ids": resolved_workload_ids,
+            "new_tenant_id": resolved_target_project,
+            "user_id": resolved_user_id,
+        }
+
+        if old_tenant_ids:
+            if isinstance(old_tenant_ids, (str, bytes)):
+                old_tenant_ids = [old_tenant_ids]
+            resolved_old = [self.find_project_id(t) for t in old_tenant_ids if t]
+            body["old_tenant_ids"] = resolved_old
+
+        if source_btt:
+            if isinstance(source_btt, list):
+                body["source_btt"] = source_btt
+            else:
+                body["source_btt"] = [source_btt]
+
+        if target_btt:
+            body["target_btt"] = target_btt
+
+        if migrate_storage is not None:
+            body["migrate_storage"] = bool(migrate_storage)
+
+        return self.post(subpath, json_data=body)
+
