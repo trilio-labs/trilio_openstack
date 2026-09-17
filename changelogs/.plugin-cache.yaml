@@ -1,0 +1,83 @@
+objects:
+  role: {}
+plugins:
+  become: {}
+  cache: {}
+  callback: {}
+  cliconf: {}
+  connection: {}
+  filter: {}
+  httpapi: {}
+  inventory: {}
+  lookup: {}
+  module:
+    backup_target:
+      description: Manage Trilio for OpenStack Backup Targets and Backup Target Types
+        (BTT)
+      name: backup_target
+      namespace: ''
+      version_added: 1.1.0
+    backup_target_info:
+      description: Retrieve information about Trilio for OpenStack backup targets
+        and target types
+      name: backup_target_info
+      namespace: ''
+      version_added: 1.1.0
+    trilio_backup_target:
+      description: Manage Trilio for OpenStack Backup Targets and Backup Target Types
+        (BTT)
+      name: trilio_backup_target
+      namespace: ''
+      version_added: 1.1.0
+    trilio_backup_target_info:
+      description: Retrieve information about Trilio for OpenStack backup targets
+        and target types
+      name: trilio_backup_target_info
+      namespace: ''
+      version_added: 1.1.0
+    trilio_workload:
+      description: Manage Trilio for OpenStack backup workloads
+      name: trilio_workload
+      namespace: ''
+      version_added: 1.1.0
+    trilio_workload_info:
+      description: Retrieve information about Trilio for OpenStack workloads
+      name: trilio_workload_info
+      namespace: ''
+      version_added: 1.0.0
+    trilio_workload_restore:
+      description: Perform and manage restores from Trilio for OpenStack snapshots
+      name: trilio_workload_restore
+      namespace: ''
+      version_added: 1.1.0
+    trilio_workload_snapshot:
+      description: Create and manage snapshots (backups) of Trilio for OpenStack workloads
+      name: trilio_workload_snapshot
+      namespace: ''
+      version_added: 1.1.0
+    workload:
+      description: Manage Trilio for OpenStack backup workloads
+      name: workload
+      namespace: ''
+      version_added: 1.1.0
+    workload_info:
+      description: Retrieve information about Trilio for OpenStack workloads
+      name: workload_info
+      namespace: ''
+      version_added: 1.0.0
+    workload_restore:
+      description: Perform and manage restores from Trilio for OpenStack snapshots
+      name: workload_restore
+      namespace: ''
+      version_added: 1.1.0
+    workload_snapshot:
+      description: Create and manage snapshots (backups) of Trilio for OpenStack workloads
+      name: workload_snapshot
+      namespace: ''
+      version_added: 1.1.0
+  netconf: {}
+  shell: {}
+  strategy: {}
+  test: {}
+  vars: {}
+version: 1.0.0

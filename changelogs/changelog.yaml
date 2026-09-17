@@ -1,0 +1,32 @@
+ancestor: null
+releases:
+  1.0.0:
+    changes:
+      major_changes:
+      - backup_target - Manage NFS and S3 backup targets with dynamic mount management
+        via Trilio 6.2+ Data Mover Service (DMS).
+      - backup_target_info - Query and discover backup targets and linked Backup Target
+        Types (BTT).
+      - workload - Create, update, and manage protected OpenStack application workloads,
+        instance memberships, and snapshot schedules.
+      - workload_info - List and inspect workloads, project protection coverage, and
+        snapshot history with S3 bucket and target filters.
+      - workload_restore - Perform One-Click, In-Place, and Selective restores of
+        workloads, virtual machines, and storage volumes.
+      - workload_snapshot - Trigger on-demand incremental and full baseline backups
+        of protected workloads with synchronous waiting.
+      release_summary: 'Initial release of the ``trilio.trilio_openstack`` collection,
+        providing enterprise backup and recovery automation for Trilio for OpenStack
+        (Workload Manager) and Red Hat OpenStack Services on OpenShift (RHOSO).
+
+        '
+    fragments:
+    - 1.0.0.yaml
+    modules:
+    - description: Retrieve information about Trilio for OpenStack workloads.
+      name: trilio_workload_info
+      namespace: ''
+    - description: Retrieve information about Trilio for OpenStack workloads.
+      name: workload_info
+      namespace: ''
+    release_date: '2026-09-17'

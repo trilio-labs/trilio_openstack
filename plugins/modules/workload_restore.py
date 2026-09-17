@@ -14,14 +14,14 @@ short_description: Perform and manage restores from Trilio for OpenStack snapsho
 version_added: "1.1.0"
 description:
   - Restore workloads or instances from snapshots in Trilio for OpenStack.
-  - Supports three distinct restore options:
-    - B(One-Click Restore) (C(oneclick) / C(one-click)): Automated full workload recovery to the original
-      configuration and location. Automatically maps instances, networks, and storage.
-    - B(In-Place Restore) (C(inplace) / C(in-place)): Overwrites existing VM volume and boot disk data
-      without provisioning new instances. Useful for rapid rollback of corrupted data.
-    - B(Selective Restore) (C(selective)): Granular recovery allowing selection of specific instances,
-      renaming instances, custom network and subnet mappings, volume type conversions, flavor changes,
-      availability zone assignment, and Nova server group preservation.
+  - Supports three distinct restore options.
+  - "B(One-Click Restore) (C(oneclick) / C(one-click)): Automated full workload recovery to the original
+    configuration and location. Automatically maps instances, networks, and storage."
+  - "B(In-Place Restore) (C(inplace) / C(in-place)): Overwrites existing VM volume and boot disk data
+    without provisioning new instances. Useful for rapid rollback of corrupted data."
+  - "B(Selective Restore) (C(selective)): Granular recovery allowing selection of specific instances,
+    renaming instances, custom network and subnet mappings, volume type conversions, flavor changes,
+    availability zone assignment, and Nova server group preservation."
   - Snapshots can be targeted directly by UUID (C(snapshot_id) / C(snapshot)), by display name
     (C(snapshot_name)), or by parent workload (C(workload) / C(workload_id)) targeting the latest available backup.
   - Supports loading external Trilio CLI C(restore.json) template files via C(restore_file).
@@ -42,9 +42,9 @@ options:
   restore_type:
     description:
       - Type of restore operation to execute.
-      - C(oneclick) / C(one-click): Complete automated restore to original configuration.
-      - C(inplace) / C(in-place): Overwrite existing compute volume data in-place.
-      - C(selective): Granular restoration with custom network, compute, and volume mappings.
+      - "C(oneclick) / C(one-click): Complete automated restore to original configuration."
+      - "C(inplace) / C(in-place): Overwrite existing compute volume data in-place."
+      - "C(selective): Granular restoration with custom network, compute, and volume mappings."
     type: str
     choices: ['oneclick', 'one-click', 'inplace', 'in-place', 'selective']
     default: 'oneclick'

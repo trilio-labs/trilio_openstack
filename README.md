@@ -742,6 +742,31 @@ ansible-playbook --syntax-check playbooks/*.yml
 
 ---
 
+## Red Hat Partner Certification & Quality Assurance
+
+This collection integrates the official [Red Hat Partner Certification Checker](https://github.com/ansible-collections/partner-certification-checker) as part of its automated CI quality assurance workflow ([`.github/workflows/certification.yml`](.github/workflows/certification.yml)).
+
+The reusable workflow executes the identical test suite run during Red Hat Ansible Automation Hub certification imports:
+* **Galaxy Importer Checks**: Validates collection structure, `galaxy.yml` metadata, documentation parsing, and changelog references.
+* **Ansible Lint**: Enforces production profile rules across all playbooks and modules using [`.ansible-lint`](.ansible-lint).
+* **Ansible Sanity Tests**: Verifies code quality and Python/Ansible compatibility standards across supported `ansible-core` versions.
+
+---
+
+# Changelog
+Release notes and changelog can be found in the [CHANGELOG.rst](CHANGELOG.rst) file.
+
+# Support
+
+As Red Hat Ansible Certified Content, this collection is entitled
+to support through the Ansible Automation Platform (AAP) using the
+**Create issue** button on the top right corner.
+If a support case cannot be opened with Red Hat and the collection
+has been obtained either from Galaxy or GitHub, there may be community
+help available on the [Ansible Forum](https://forum.ansible.com/).
+
+---
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.

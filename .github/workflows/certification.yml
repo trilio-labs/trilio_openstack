@@ -1,0 +1,24 @@
+---
+# This workflow calls a pinned version of the
+# reusable workflow from ansible-collections/partner-certification-checker.
+# It checks against pinned versions of Automation Hub tests (galaxy-importer, ansible-lint, ansible sanity).
+# The version is pinned to an exact release tag (@v5.0.0) for supply chain security.
+name: Run collection certification checks
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+
+concurrency:
+  group: cert-ver-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  call:
+    uses: ansible-collections/partner-certification-checker/.github/workflows/certification-reusable.yml@v5.0.0 # zizmor: ignore[unpinned-uses]
