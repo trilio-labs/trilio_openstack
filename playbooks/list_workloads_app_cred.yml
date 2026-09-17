@@ -18,7 +18,9 @@
           application_credential_name: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_NAME') | default(omit, true) }}"
           application_credential_secret: "{{ lookup('ansible.builtin.env', 'OS_APPLICATION_CREDENTIAL_SECRET') }}"
         region_name: "{{ lookup('ansible.builtin.env', 'OS_REGION_NAME') | default(omit, true) }}"
-        validate_certs: "{{ (lookup('ansible.builtin.env', 'OS_INSECURE') | lower != 'true') and (lookup('ansible.builtin.env', 'OS_VERIFY') | default('true', true) | bool) }}"
+        validate_certs: >-
+          {{ (lookup('ansible.builtin.env', 'OS_INSECURE') | lower != 'true')
+          and (lookup('ansible.builtin.env', 'OS_VERIFY') | default('true', true) | bool) }}
         ca_cert: "{{ lookup('ansible.builtin.env', 'OS_CACERT') | default(omit, true) }}"
       register: workload_result
 

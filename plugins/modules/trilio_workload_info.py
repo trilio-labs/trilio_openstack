@@ -19,5 +19,7 @@ from ansible_collections.trilio.trilio_openstack.plugins.modules.workload_info i
     main
 )
 
+__all__ = ('DOCUMENTATION', 'EXAMPLES', 'RETURN', 'main')
+
 if __name__ == '__main__':
     main()

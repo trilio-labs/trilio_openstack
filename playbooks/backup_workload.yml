@@ -63,8 +63,11 @@
     resolved_backup_type: "{{ (snapshot_type | default(backup_type, true) | default('incremental', true)) | lower | trim }}"
 
     # Optional snapshot display name and description
-    custom_snapshot_name: "{{ snapshot_name | default(backup_name | default(lookup('ansible.builtin.env', 'BACKUP_NAME', default=''), true), true) | default(omit, true) }}"
-    custom_snapshot_description: "{{ snapshot_description | default(backup_description | default(lookup('ansible.builtin.env', 'BACKUP_DESCRIPTION', default='On-demand backup triggered via Ansible'), true), true) }}"
+    custom_snapshot_name: >-
+      {{ snapshot_name | default(backup_name | default(lookup('ansible.builtin.env', 'BACKUP_NAME', default=''), true), true) | default(omit, true) }}
+    custom_snapshot_description: >-
+      {{ snapshot_description | default(backup_description |
+         default(lookup('ansible.builtin.env', 'BACKUP_DESCRIPTION', default='On-demand backup triggered via Ansible'), true), true) }}
 
     # Wait for completion (default: false for asynchronous execution, true for synchronous blocking)
     wait_for_completion: "{{ (wait | default(lookup('ansible.builtin.env', 'WAIT_FOR_COMPLETION', default=false))) | bool }}"
@@ -94,7 +97,10 @@
           - "Target Workload: {{ resolved_workload }}"
           - "Backup Type:    {{ resolved_backup_type | upper }}"
           - "Synchronous:    {{ wait_for_completion }}"
-          - "Workload Found: {{ 'Yes (' + wl_query.workloads[0].id + ')' if (wl_query.workloads is defined and wl_query.workloads | length > 0) else 'Will resolve by ID/API' }}"
+          - >-
+            Workload Found: {{ 'Yes (' + wl_query.workloads[0].id + ')'
+            if (wl_query.workloads is defined and wl_query.workloads | length > 0)
+            else 'Will resolve by ID/API' }}
 
     - name: 4. Trigger on-demand workload backup
       trilio.trilio_openstack.workload_snapshot:

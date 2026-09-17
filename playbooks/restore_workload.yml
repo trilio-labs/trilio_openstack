@@ -62,17 +62,24 @@
 
     # Target snapshot or workload identifier
     target_snapshot_param: "{{ target_snapshot | default(snapshot | default(snapshot_id | default('', true), true), true) | trim }}"
-    target_workload_param: "{{ target_workload | default(workload | default(workload_name | default(workload_id | default('', true), true), true), true) | trim }}"
+    target_workload_param: >-
+      {{ target_workload | default(workload | default(workload_name | default(workload_id | default('', true), true), true), true) | trim }}
 
     # Fallback to prompt if neither CLI parameter provided
-    resolved_target: "{{ target_snapshot_param if (target_snapshot_param | length > 0) else (target_workload_param if (target_workload_param | length > 0) else target_identifier) | trim }}"
+    resolved_target: >-
+      {{ target_snapshot_param if (target_snapshot_param | length > 0)
+      else (target_workload_param if (target_workload_param | length > 0) else target_identifier) | trim }}
 
     # Restore type normalization (oneclick, inplace, selective)
-    resolved_restore_type: "{{ (restore_type | default(selected_restore_type, true) | default('one-click', true)) | lower | replace('-', '') | replace('_', '') | trim }}"
+    resolved_restore_type: >-
+      {{ (restore_type | default(selected_restore_type, true) | default('one-click', true))
+      | lower | replace('-', '') | replace('_', '') | trim }}
 
     # Optional restore name and description
     custom_restore_name: "{{ restore_name | default(lookup('ansible.builtin.env', 'RESTORE_NAME', default=''), true) | default(omit, true) }}"
-    custom_restore_description: "{{ restore_description | default(lookup('ansible.builtin.env', 'RESTORE_DESCRIPTION', default='On-demand restore initiated via Ansible'), true) }}"
+    custom_restore_description: >-
+      {{ restore_description | default(lookup('ansible.builtin.env', 'RESTORE_DESCRIPTION',
+         default='On-demand restore initiated via Ansible'), true) }}
 
     # Optional restore.json configuration file path
     resolved_restore_file: "{{ restore_file | default(lookup('ansible.builtin.env', 'RESTORE_FILE', default=''), true) | default(omit, true) }}"

@@ -13,7 +13,6 @@ __metaclass__ = type
 
 import os
 import re
-import json
 
 # Try importing openstacksdk for native OpenStack Ansible integration
 try:
@@ -318,6 +317,17 @@ class TrilioClient:
 
         self._resolve_endpoint()
 
+    @staticmethod
+    def _extract_endpoint_url(ep, interface):
+        url = ep.get('url')
+        if url:
+            return url
+        if interface == 'public':
+            return ep.get('publicURL')
+        if interface == 'internal':
+            return ep.get('internalURL')
+        return ep.get('adminURL')
+
     def _resolve_endpoint(self):
         """
         Discovers the Trilio Workload Manager endpoint from the Keystone
@@ -366,7 +376,7 @@ class TrilioClient:
                     for ep in endpoints:
                         ep_interface = ep.get('interface')
                         ep_region = ep.get('region') or ep.get('region_id')
-                        url = ep.get('url') or (ep.get('publicURL') if interface == 'public' else (ep.get('internalURL') if interface == 'internal' else ep.get('adminURL')))
+                        url = self._extract_endpoint_url(ep, interface)
                         if url:
                             if not ep_interface or ep_interface == interface:
                                 if not region_name or ep_region == region_name:
@@ -376,7 +386,7 @@ class TrilioClient:
                     # Fallback to matching interface across any region
                     for ep in endpoints:
                         ep_interface = ep.get('interface')
-                        url = ep.get('url') or (ep.get('publicURL') if interface == 'public' else (ep.get('internalURL') if interface == 'internal' else ep.get('adminURL')))
+                        url = self._extract_endpoint_url(ep, interface)
                         if url and (not ep_interface or ep_interface == interface):
                             self.endpoint = self._format_endpoint(url)
                             self._post_process_endpoint()
@@ -1424,6 +1434,3 @@ class TrilioClient:
             pass
 
         return available_snaps[0]
-
-
-

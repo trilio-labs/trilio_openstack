@@ -310,7 +310,6 @@ restore:
 
 import json
 import os
-import re
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.trilio.trilio_openstack.plugins.module_utils.trilio import (
     trilio_argument_spec,

@@ -138,6 +138,7 @@
             OS_CLOUD: "{{ cloud_name }}"
           no_log: true
           register: cli_store_result
+          changed_when: true
           when: (cli_list_result.stdout | default('[]') | from_json | length) == 0
 
         - name: Extract secret_ref URL from OpenStack CLI

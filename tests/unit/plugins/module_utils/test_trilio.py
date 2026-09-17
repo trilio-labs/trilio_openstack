@@ -2,6 +2,9 @@
 # Copyright: (c) 2026, Kevin Jackson
 # Apache License, Version 2.0 (see LICENSE or https://www.apache.org/licenses/LICENSE-2.0)
 
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -466,5 +469,3 @@ class TestTrilioModuleUtils(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-
-

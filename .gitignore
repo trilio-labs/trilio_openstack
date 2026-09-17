@@ -57,3 +57,4 @@ secure.yaml
 # Ansible retry and artifacts
 *.retry
 *.tar.gz
+.ansible/
