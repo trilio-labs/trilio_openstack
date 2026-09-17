@@ -145,6 +145,10 @@ options:
     choices: ['public', 'internal', 'admin']
     default: 'public'
     aliases: ['endpoint_type']
+  api_timeout:
+    description:
+      - Timeout in seconds for OpenStack SDK API calls.
+    type: int
 '''
 
 EXAMPLES = r'''

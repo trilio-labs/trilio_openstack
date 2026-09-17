@@ -183,6 +183,10 @@ options:
     choices: ['public', 'internal', 'admin']
     default: 'public'
     aliases: ['endpoint_type']
+  api_timeout:
+    description:
+      - Timeout in seconds for OpenStack SDK API calls.
+    type: int
 '''
 
 EXAMPLES = r'''
@@ -538,10 +542,27 @@ def run_module():
         built_options['restore_type'] = 'selective'
         if instances_param:
             openstack_config['instances'] = instances_param
+        elif not openstack_config.get('instances'):
+            # Auto-populate instances from snapshot details if omitted
+            snap_obj = client.get_snapshot(target_snapshot_id, project_id=project_id)
+            auto_instances = []
+            if snap_obj and isinstance(snap_obj, dict):
+                for inst in snap_obj.get('instances', []):
+                    auto_instances.append({
+                        'id': inst.get('id'),
+                        'include': True,
+                        'name': inst.get('name'),
+                        'availability_zone': inst.get('metadata', {}).get('availability_zone') or 'nova',
+                        'restore_boot_disk': True
+                    })
+            openstack_config['instances'] = auto_instances
+
         if restore_topology is not None:
             openstack_config['restore_topology'] = bool(restore_topology)
-        if networks_mapping:
-            openstack_config['networks_mapping'] = networks_mapping
+        else:
+            openstack_config['restore_topology'] = True
+
+        openstack_config['networks_mapping'] = networks_mapping or {'networks': []}
 
     # Prepare display name and description
     restore_label = 'OneClick' if norm_restore_type == 'oneclick' else ('Inplace' if norm_restore_type == 'inplace' else 'Selective')

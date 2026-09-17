@@ -11,7 +11,7 @@ DOCUMENTATION = r'''
 ---
 module: workload_reassign
 short_description: Reassign Trilio for OpenStack workloads to a new tenant/user
-version_added: "1.1.0"
+version_added: "1.0.1"
 description:
   - Reassign ownership of one or more Trilio workloads and their associated backup snapshot chains
     from a source OpenStack tenant (project) to a target tenant and user.
@@ -89,17 +89,36 @@ options:
     type: str
     default: 'public'
     choices: ['public', 'internal', 'admin']
+    aliases: ['endpoint_type']
   validate_certs:
     description:
       - Whether to validate SSL/TLS certificates.
     type: bool
-    default: true
     aliases: ['verify']
+  ca_cert:
+    description:
+      - Path to CA certificate bundle to verify SSL/TLS connections.
+    type: str
+    aliases: ['cacert']
+  client_cert:
+    description:
+      - Path to SSL client certificate file.
+    type: str
+    aliases: ['cert']
+  client_key:
+    description:
+      - Path to SSL client key file.
+    type: str
+    aliases: ['key']
   timeout:
     description:
       - HTTP request timeout in seconds.
     type: int
     default: 180
+  api_timeout:
+    description:
+      - Timeout in seconds for OpenStack SDK API calls.
+    type: int
   trilio_endpoint:
     description:
       - Explicit URL override for the Trilio Workload Manager API.
@@ -239,43 +258,20 @@ def run_module():
     target_project_id = client.find_project_id(target_project)
     target_user_id = client.find_user_id(target_user)
 
-    # Resolve workload UUIDs and check if already in target project
-    resolved_workload_ids = []
-    already_assigned_count = 0
+    source_project_id = client.find_project_id(source_project) if source_project else None
 
-    all_wls = client.list_workloads(all_projects=True)
+    # Resolve workload UUIDs
+    resolved_workload_ids = []
     for identifier in workload_identifiers:
         is_uuid = bool(re.match(r'^[0-9a-fA-F-]{36}$', str(identifier)) or re.match(r'^[0-9a-fA-F]{32}$', str(identifier)))
-        found_wl = None
-        for w in all_wls:
-            if is_uuid and w.get('id') == identifier:
-                found_wl = w
-                break
-            elif not is_uuid and (w.get('name') == identifier or w.get('display_name') == identifier):
-                found_wl = w
-                break
-
-        if found_wl:
-            wl_id = found_wl.get('id')
-            resolved_workload_ids.append(wl_id)
-            # Check if already owned by target project and target user
-            curr_proj = found_wl.get('project_id') or found_wl.get('tenant_id')
-            curr_user = found_wl.get('user_id')
-            if curr_proj == target_project_id and (not target_user_id or curr_user == target_user_id):
-                already_assigned_count += 1
+        if is_uuid:
+            resolved_workload_ids.append(str(identifier))
         else:
-            resolved_workload_ids.append(identifier)
-
-    # Idempotency check: if all requested workloads are already in the target project/user
-    if already_assigned_count == len(resolved_workload_ids) and len(resolved_workload_ids) > 0:
-        module.exit_json(
-            changed=False,
-            msg="All specified workloads are already assigned to target project %s." % target_project_id,
-            target_project_id=target_project_id,
-            target_user_id=target_user_id,
-            workloads=resolved_workload_ids
-        )
-        return
+            found_wl = client.get_workload_by_name(identifier, project_id=source_project_id)
+            if found_wl:
+                resolved_workload_ids.append(found_wl.get('id'))
+            else:
+                resolved_workload_ids.append(str(identifier))
 
     if module.check_mode:
         module.exit_json(

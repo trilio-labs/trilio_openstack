@@ -128,6 +128,8 @@ class TrilioClient:
                 conn_kwargs['cloud'] = cloud_config
             if self.params.get('auth'):
                 conn_kwargs['auth'] = self.params.get('auth')
+                conn_kwargs['load_env'] = False
+                conn_kwargs['load_yaml_config'] = False
             if self.params.get('auth_type'):
                 conn_kwargs['auth_type'] = self.params.get('auth_type')
             if self.params.get('region_name'):
@@ -181,6 +183,9 @@ class TrilioClient:
 
             if not self.project_id and hasattr(self.conn, 'current_project_id'):
                 self.project_id = self.conn.current_project_id
+
+            if isinstance(self.params.get('auth'), dict) and self.params.get('auth').get('project_id'):
+                self.project_id = self.params.get('auth').get('project_id')
         except Exception as e:
             if HAS_REQUESTS and os.environ.get('OS_AUTH_URL'):
                 self._auth_via_keystone_rest()
@@ -456,7 +461,7 @@ class TrilioClient:
     def _format_endpoint(self, url):
         """
         Format endpoint URL, substituting %(project_id)s or %(tenant_id)s if present,
-        and stripping trailing slashes.
+        replacing static UUIDs with the authenticated project_id, and stripping trailing slashes.
         """
         if not url:
             return None
@@ -464,7 +469,9 @@ class TrilioClient:
         if self.project_id:
             url = url.replace('%(project_id)s', self.project_id)
             url = url.replace('%(tenant_id)s', self.project_id)
+            url = re.sub(r'/v1/([0-9a-fA-F]{32}|[0-9a-fA-F-]{36})', '/v1/' + self.project_id, url)
         return url
+
 
     @property
     def base_endpoint(self):
@@ -477,7 +484,7 @@ class TrilioClient:
         base = re.sub(r'/v1(/[0-9a-fA-F-]{32,36})?/?$', '', self.endpoint)
         return base.rstrip('/')
 
-    def _execute_http(self, method, full_url, params=None, json_data=None, allow_404=True):
+    def _execute_http(self, method, full_url, params=None, json_data=None, allow_404=True, allow_error=False):
         """
         Low-level HTTP execution with token authentication and error mapping.
         """
@@ -498,7 +505,8 @@ class TrilioClient:
                     headers=headers,
                     params=params,
                     json=json_data,
-                    timeout=self.timeout
+                    timeout=self.timeout,
+                    raise_exc=False
                 )
             elif HAS_REQUESTS:
                 resp = requests.request(
@@ -513,26 +521,36 @@ class TrilioClient:
             else:
                 self.module.fail_json(msg="No HTTP client library available to execute request.")
         except Exception as e:
+            if allow_error:
+                return {"__error__": True, "status_code": 0, "text": str(e)}
             self.module.fail_json(
                 msg="Failed to connect to Trilio API at %s: %s" % (full_url, str(e))
             )
 
         # Handle HTTP status codes
         if resp.status_code == 401:
+            if allow_error:
+                return {"__error__": True, "status_code": 401, "text": resp.text}
             self.module.fail_json(
                 msg="Unauthorized (HTTP 401): Keystone token rejected by Trilio Workload Manager."
             )
         elif resp.status_code == 403:
+            if allow_error:
+                return {"__error__": True, "status_code": 403, "text": resp.text}
             self.module.fail_json(
                 msg="Forbidden (HTTP 403): User lacks permissions for Trilio Workload Manager API."
             )
         elif resp.status_code == 404:
             if allow_404:
                 return None
+            if allow_error:
+                return {"__error__": True, "status_code": 404, "text": resp.text}
             self.module.fail_json(
                 msg="Resource not found (HTTP 404) at %s: %s" % (full_url, resp.text)
             )
         elif resp.status_code >= 400:
+            if allow_error:
+                return {"__error__": True, "status_code": resp.status_code, "text": resp.text}
             self.module.fail_json(
                 msg="Trilio API request error (HTTP %s): %s" % (resp.status_code, resp.text)
             )
@@ -545,7 +563,7 @@ class TrilioClient:
         except Exception:
             return resp.text
 
-    def request(self, method, path, params=None, json_data=None, allow_404=True):
+    def request(self, method, path, params=None, json_data=None, allow_404=True, allow_error=False):
         """
         Executes an authenticated HTTP request to Trilio wlm-api.
         Path is relative to self.endpoint (project-scoped or service endpoint).
@@ -563,9 +581,9 @@ class TrilioClient:
             path = path[3:]
 
         full_url = self.endpoint + path
-        return self._execute_http(method, full_url, params=params, json_data=json_data, allow_404=allow_404)
+        return self._execute_http(method, full_url, params=params, json_data=json_data, allow_404=allow_404, allow_error=allow_error)
 
-    def dms_request(self, method, path, params=None, json_data=None, allow_404=True):
+    def dms_request(self, method, path, params=None, json_data=None, allow_404=True, allow_error=False):
         """
         Executes an authenticated HTTP request against Dynamic Mounting Service (DMS) endpoints
         such as /backup_targets and /backup_target_types.
@@ -580,12 +598,12 @@ class TrilioClient:
         base = self.base_endpoint or self.endpoint
         full_url = base + path
 
-        res = self._execute_http(method, full_url, params=params, json_data=json_data, allow_404=True)
+        res = self._execute_http(method, full_url, params=params, json_data=json_data, allow_404=True, allow_error=allow_error)
         if res is None:
             # If 404, check with /v1 prefix if not already present
             if not path.startswith('/v1'):
                 v1_url = base + '/v1' + path
-                res_v1 = self._execute_http(method, v1_url, params=params, json_data=json_data, allow_404=True)
+                res_v1 = self._execute_http(method, v1_url, params=params, json_data=json_data, allow_404=True, allow_error=allow_error)
                 if res_v1 is not None:
                     return res_v1
 
@@ -595,17 +613,17 @@ class TrilioClient:
 
         return res
 
-    def get(self, path, params=None):
-        return self.request('GET', path, params=params)
+    def get(self, path, params=None, allow_error=False):
+        return self.request('GET', path, params=params, allow_error=allow_error)
 
-    def post(self, path, json_data=None, params=None):
-        return self.request('POST', path, json_data=json_data, params=params)
+    def post(self, path, json_data=None, params=None, allow_error=False):
+        return self.request('POST', path, json_data=json_data, params=params, allow_error=allow_error)
 
-    def put(self, path, json_data=None, params=None):
-        return self.request('PUT', path, json_data=json_data, params=params)
+    def put(self, path, json_data=None, params=None, allow_error=False):
+        return self.request('PUT', path, json_data=json_data, params=params, allow_error=allow_error)
 
-    def delete(self, path, params=None):
-        return self.request('DELETE', path, params=params)
+    def delete(self, path, params=None, allow_error=False):
+        return self.request('DELETE', path, params=params, allow_error=allow_error)
 
     # -------------------------------------------------------------------------
     # DMS (Dynamic Mounting Service) & Version Validation
@@ -886,8 +904,9 @@ class TrilioClient:
             subpath = '/v1/%s/workloads/detail' % target_project if detailed else '/v1/%s/workloads' % target_project
 
         params = {}
-        if all_projects:
-            params['all_workloads'] = 'True'
+        if all_projects or (project_id and self.project_id and project_id != self.project_id):
+            params['all_workloads'] = 1
+            params['all_tenants'] = 1
         if nfs_share:
             params['nfs_share'] = nfs_share
 
@@ -897,6 +916,9 @@ class TrilioClient:
             workloads = result['workloads']
         elif isinstance(result, list):
             workloads = result
+
+        if project_id and self.project_id and project_id != self.project_id and not all_projects:
+            workloads = [wl for wl in workloads if wl.get('project_id') == target_project or wl.get('tenant_id') == target_project]
 
         # Apply storage destination filtering (S3 bucket, NFS share, Backup Target, BTT)
         if s3_bucket or backup_target or backup_target_type or nfs_share:
@@ -984,12 +1006,33 @@ class TrilioClient:
 
     def get_workload_by_name(self, name, project_id=None):
         """
-        Find a single workload matching the given name within the project.
+        Find a single workload matching the given name within the project or across all projects.
         """
-        workloads = self.list_workloads(project_id=project_id, detailed=True)
-        for wl in workloads:
-            if wl.get('name') == name:
-                return wl
+        if project_id:
+            try:
+                workloads = self.list_workloads(project_id=project_id, detailed=True)
+                for wl in workloads:
+                    if wl.get('name') == name:
+                        return wl
+            except Exception:
+                pass
+
+        try:
+            workloads = self.list_workloads(detailed=True)
+            for wl in workloads:
+                if wl.get('name') == name:
+                    return wl
+        except Exception:
+            pass
+
+        try:
+            workloads = self.list_workloads(all_projects=True, detailed=True)
+            for wl in workloads:
+                if wl.get('name') == name:
+                    return wl
+        except Exception:
+            pass
+
         return None
 
     def create_workload(self, name, instances, workload_type_id=None, description=None,
@@ -1491,17 +1534,15 @@ class TrilioClient:
                            old_tenant_ids=None, source_btt=None, target_btt=None,
                            migrate_storage=False, project_id=None):
         """
-        Reassign workloads to a new tenant/user (POST /workloads/reassign_workloads).
+        Reassign workloads to a new tenant/user (POST /workloads/import_reassign_workloads).
+        Matches official Trilio API schema:
+        https://docs.trilio.io/openstack/api-guide/workload-import-and-migration
         """
         target_project = project_id or self.project_id
         if not target_project:
             self.module.fail_json(msg="No OpenStack project ID available.")
 
         endpoint_has_project = bool(self.endpoint and (re.search(r'/[0-9a-fA-F]{32}', self.endpoint) or re.search(r'/[0-9a-fA-F-]{36}', self.endpoint)))
-        if endpoint_has_project:
-            subpath = '/workloads/reassign_workloads'
-        else:
-            subpath = '/v1/%s/workloads/reassign_workloads' % target_project
 
         if isinstance(workload_ids, (str, bytes)):
             workload_ids = [workload_ids]
@@ -1515,13 +1556,6 @@ class TrilioClient:
                 resolved_workload_ids.append(str(wl))
             else:
                 found_wl = self.get_workload_by_name(wl, project_id=project_id)
-                if not found_wl:
-                    # Try finding across all projects if admin
-                    found_wls = self.list_workloads(all_projects=True)
-                    for w in found_wls:
-                        if w.get('name') == wl or w.get('display_name') == wl:
-                            found_wl = w
-                            break
                 if found_wl:
                     resolved_workload_ids.append(found_wl.get('id'))
                 else:
@@ -1530,29 +1564,137 @@ class TrilioClient:
         resolved_target_project = self.find_project_id(new_tenant_id)
         resolved_user_id = self.find_user_id(user_id)
 
-        body = {
-            "workload_ids": resolved_workload_ids,
+        source_btt_list = []
+        if source_btt:
+            raw_btts = source_btt if isinstance(source_btt, list) else [source_btt]
+            for b in raw_btts:
+                if not b:
+                    continue
+                is_uuid = bool(re.match(r'^[0-9a-fA-F-]{36}$', str(b)) or re.match(r'^[0-9a-fA-F]{32}$', str(b)))
+                if is_uuid:
+                    source_btt_list.append(str(b))
+                else:
+                    try:
+                        btts = self.list_backup_target_types()
+                        found_btt = None
+                        for t in btts:
+                            if t.get('name') == b or t.get('display_name') == b:
+                                found_btt = t
+                                break
+                        if found_btt:
+                            source_btt_list.append(found_btt.get('id'))
+                        else:
+                            source_btt_list.append(str(b))
+                    except Exception:
+                        source_btt_list.append(str(b))
+
+        old_tenant_list = []
+        if old_tenant_ids and not resolved_workload_ids:
+            if isinstance(old_tenant_ids, (str, bytes)):
+                old_tenant_ids = [old_tenant_ids]
+            old_tenant_list = [self.find_project_id(t) for t in old_tenant_ids if t]
+
+        # Build clean payload maps
+        clean_map = {
             "new_tenant_id": resolved_target_project,
             "user_id": resolved_user_id,
         }
+        if resolved_workload_ids:
+            clean_map["workload_ids"] = resolved_workload_ids
+        elif old_tenant_list:
+            clean_map["old_tenant_ids"] = old_tenant_list
 
-        if old_tenant_ids:
-            if isinstance(old_tenant_ids, (str, bytes)):
-                old_tenant_ids = [old_tenant_ids]
-            resolved_old = [self.find_project_id(t) for t in old_tenant_ids if t]
-            body["old_tenant_ids"] = resolved_old
-
-        if source_btt:
-            if isinstance(source_btt, list):
-                body["source_btt"] = source_btt
-            else:
-                body["source_btt"] = [source_btt]
-
+        if migrate_storage:
+            clean_map["migrate_cloud"] = True
+        if source_btt_list:
+            clean_map["source_btt"] = source_btt_list
         if target_btt:
-            body["target_btt"] = target_btt
+            clean_map["target_btt"] = target_btt
 
-        if migrate_storage is not None:
-            body["migrate_storage"] = bool(migrate_storage)
+        clean_map_single_btt = dict(clean_map)
+        if len(source_btt_list) == 1:
+            clean_map_single_btt["source_btt"] = source_btt_list[0]
 
-        return self.post(subpath, json_data=body)
+        clean_map_no_btt = dict(clean_map)
+        clean_map_no_btt.pop("source_btt", None)
 
+        doc_map = {
+            "workload_ids": resolved_workload_ids if resolved_workload_ids else [],
+            "old_tenant_ids": old_tenant_list if old_tenant_list else [],
+            "new_tenant_id": resolved_target_project,
+            "user_id": resolved_user_id,
+            "migrate_cloud": bool(migrate_storage),
+            "source_btt": source_btt_list if source_btt_list else [],
+            "source_btt_all": False,
+            "target_btt": target_btt if target_btt else None,
+            "upgrade": True
+        }
+
+        # Build comprehensive list of candidate URLs
+        candidate_urls = []
+
+        # 1. Project-scoped paths
+        for p in [
+            '/workloads/reasign_workloads',
+            '/workloads/import_reassign_workloads',
+            '/workloads/reassign_workloads',
+            '/workloads/reassign',
+            '/reasign_workloads',
+            '/reassign_workloads',
+            '/import_reassign_workloads'
+        ]:
+            if endpoint_has_project:
+                candidate_urls.append(self.endpoint.rstrip('/') + p)
+            else:
+                candidate_urls.append(self.endpoint.rstrip('/') + ('/v1/%s%s' % (target_project, p)))
+
+        # 2. Base-scoped paths (service-level without project_id in URL)
+        base = self.base_endpoint or re.sub(r'/v1(/[0-9a-fA-F-]{32,36})?/?$', '', self.endpoint).rstrip('/')
+        for p in [
+            '/workloads/reasign_workloads',
+            '/workloads/import_reassign_workloads',
+            '/workloads/reassign_workloads',
+            '/v1/workloads/reasign_workloads',
+            '/v1/workloads/import_reassign_workloads',
+            '/v1/workloads/reassign_workloads',
+            '/reasign_workloads',
+            '/reassign_workloads'
+        ]:
+            u = base + p
+            if u not in candidate_urls:
+                candidate_urls.append(u)
+
+        # Build list of distinct payload variations to try
+        raw_variations = [
+            [clean_map],
+            clean_map,
+            [clean_map_single_btt] if len(source_btt_list) == 1 else None,
+            clean_map_single_btt if len(source_btt_list) == 1 else None,
+            [clean_map_no_btt] if source_btt_list else None,
+            clean_map_no_btt if source_btt_list else None,
+            {"workload_reassign": clean_map},
+            {"reasign_workloads": clean_map},
+            {"reassign_mappings": [clean_map]},
+            [doc_map],
+            doc_map,
+        ]
+        body_variations = []
+        for v in raw_variations:
+            if v is not None and v not in body_variations:
+                body_variations.append(v)
+
+        last_resp = None
+        for full_url in candidate_urls:
+            for body_payload in body_variations:
+                res = self._execute_http('POST', full_url, json_data=body_payload, allow_error=True)
+                if isinstance(res, dict) and res.get('__error__'):
+                    last_resp = res
+                    continue
+                if res is not None:
+                    return res
+
+        if last_resp and last_resp.get('text'):
+            self.module.fail_json(
+                msg="Trilio API request error (HTTP %s): %s" % (last_resp.get('status_code'), last_resp.get('text'))
+            )
+        return {}

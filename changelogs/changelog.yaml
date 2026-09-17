@@ -30,3 +30,33 @@ releases:
       name: workload_info
       namespace: ''
     release_date: '2026-09-17'
+  1.0.1:
+    changes:
+      major_changes:
+      - workload_reassign - Reassign ownership of one or more Trilio workloads and
+        backup snapshot chains across OpenStack tenants and users.
+      - workload_snapshot_info - Retrieve detailed snapshot metadata, protected instances,
+        and discover restored network topology (networks, subnets, CIDRs).
+      release_summary: 'Release 1.0.1 of the ``trilio.trilio_openstack`` collection,
+        introducing cross-tenant workload reassignment and detailed snapshot network
+        topology discovery for migration, rollback, and cleanup workflows.
+
+        '
+    fragments:
+    - 1.0.1.yaml
+    modules:
+    - description: Reassign Trilio for OpenStack workloads to a new tenant/user.
+      name: trilio_workload_reassign
+      namespace: ''
+    - description: Retrieve detailed information and network topology from Trilio
+        for OpenStack workload snapshots.
+      name: trilio_workload_snapshot_info
+      namespace: ''
+    - description: Reassign Trilio for OpenStack workloads to a new tenant/user.
+      name: workload_reassign
+      namespace: ''
+    - description: Retrieve detailed information and network topology from Trilio
+        for OpenStack workload snapshots.
+      name: workload_snapshot_info
+      namespace: ''
+    release_date: '2026-09-17'

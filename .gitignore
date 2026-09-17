@@ -58,3 +58,4 @@ secure.yaml
 *.retry
 *.tar.gz
 .ansible/
+tests/output/

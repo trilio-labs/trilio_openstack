@@ -45,6 +45,11 @@ plugins:
       name: trilio_workload_info
       namespace: ''
       version_added: 1.0.0
+    trilio_workload_reassign:
+      description: Reassign Trilio for OpenStack workloads to a new tenant/user
+      name: trilio_workload_reassign
+      namespace: ''
+      version_added: 1.0.1
     trilio_workload_restore:
       description: Perform and manage restores from Trilio for OpenStack snapshots
       name: trilio_workload_restore
@@ -55,6 +60,12 @@ plugins:
       name: trilio_workload_snapshot
       namespace: ''
       version_added: 1.1.0
+    trilio_workload_snapshot_info:
+      description: Retrieve detailed information and network topology from Trilio
+        for OpenStack workload snapshots
+      name: trilio_workload_snapshot_info
+      namespace: ''
+      version_added: 1.0.1
     workload:
       description: Manage Trilio for OpenStack backup workloads
       name: workload
@@ -65,6 +76,11 @@ plugins:
       name: workload_info
       namespace: ''
       version_added: 1.0.0
+    workload_reassign:
+      description: Reassign Trilio for OpenStack workloads to a new tenant/user
+      name: workload_reassign
+      namespace: ''
+      version_added: 1.0.1
     workload_restore:
       description: Perform and manage restores from Trilio for OpenStack snapshots
       name: workload_restore
@@ -75,9 +91,15 @@ plugins:
       name: workload_snapshot
       namespace: ''
       version_added: 1.1.0
+    workload_snapshot_info:
+      description: Retrieve detailed information and network topology from Trilio
+        for OpenStack workload snapshots
+      name: workload_snapshot_info
+      namespace: ''
+      version_added: 1.0.1
   netconf: {}
   shell: {}
   strategy: {}
   test: {}
   vars: {}
-version: 1.0.0
+version: 1.0.1

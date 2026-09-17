@@ -300,6 +300,73 @@ Creates and manages on-demand snapshots (backups) of Trilio for OpenStack worklo
 
 ---
 
+## Module Reference: `trilio.trilio_openstack.workload_snapshot_info`
+
+> **Access Level:** End User / Tenant (Project Member) or Cloud Administrator  
+> **Alias:** Also accessible via alias `trilio.trilio_openstack.trilio_workload_snapshot_info`.
+
+Retrieves detailed snapshot metadata, protected instance details, and network topology (subnets, CIDRs, and network UUIDs) from Trilio for OpenStack workload snapshots.
+
+### Dynamic Topology Discovery & Teardown
+When performing disaster recovery, cross-tenant migration, or lab testing, restores often reconstruct the original network topology (routers, networks, subnets, and ports). The `workload_snapshot_info` module dynamically parses the snapshot's VM network interface attachments (`nics`), producing:
+* `discovered_instances`: List of VM names protected in the snapshot.
+* `discovered_networks`: List of network names associated with instances in the snapshot.
+* `discovered_topology`: Structured list of networks, subnets, and CIDRs.
+
+This allows playbooks (such as automated migration reset/cleanup playbooks) to dynamically determine precisely which VMs and networks were restored without hardcoding names.
+
+### Parameter Reference & Variables
+
+| Variable / Parameter | Type | Default | Choices / Aliases | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `cloud` | `raw` | `None` | | Name of the cloud in `clouds.yaml` or cloud dictionary. |
+| `auth` | `dict` | `None` | `no_log: true` | Keystone authentication dictionary. |
+| `workload` | `str` | `None` | `workload_id`, `workload_name` | Name or UUID of the parent workload. |
+| `snapshot` | `str` | `None` | `snapshot_id`, `snapshot_name`, `id` | Name or UUID of the snapshot to query. Set to `latest` to target the most recent available snapshot. |
+| `all_snapshots` | `bool` | `false` | | When `true`, queries all snapshots for the specified workload. |
+| `project_id` | `str` | `None` | | OpenStack project UUID to query snapshots within. |
+| `validate_certs` | `bool` | `true` | `verify` | Whether to validate SSL/TLS certificates. |
+| `timeout` | `int` | `180` | | HTTP request timeout in seconds. |
+
+### Return Values
+
+| Return Field | Type | Description |
+| :--- | :--- | :--- |
+| `snapshots` | `list[dict]` | List of detailed snapshot records from the Trilio API. |
+| `discovered_instances` | `list[str]` | List of VM names protected in the snapshot(s). |
+| `discovered_networks` | `list[str]` | List of network names attached to instances in the snapshot(s). |
+| `discovered_topology` | `list[dict]` | Structured network topology containing network names, IDs, subnets, and CIDRs. |
+
+### Task Examples
+
+```yaml
+# 1. Query the latest snapshot and discovered network topology for a workload
+- name: Inspect workload snapshot topology
+  trilio.trilio_openstack.workload_snapshot_info:
+    cloud: openstack
+    workload: "Fileserver Workloads"
+    snapshot: "latest"
+  register: snapshot_details
+
+- name: Display discovered VMs and networks
+  ansible.builtin.debug:
+    msg:
+      - "Protected VMs:       {{ snapshot_details.discovered_instances }}"
+      - "Associated Networks: {{ snapshot_details.discovered_networks }}"
+      - "Network Topology:    {{ snapshot_details.discovered_topology }}"
+
+# 2. Dynamic cleanup using discovered topology
+- name: Delete restored networks by discovered name
+  openstack.cloud.network:
+    cloud: destination_cloud
+    name: "{{ item.id }}"
+    state: absent
+  loop: "{{ dest_networks.openstack_networks }}"
+  when: item.name in snapshot_details.discovered_networks
+```
+
+---
+
 ## Module Reference: `trilio.trilio_openstack.workload_restore`
 
 > **Access Level:** End User / Tenant (Project Member) or Cloud Administrator  
