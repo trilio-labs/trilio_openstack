@@ -1,0 +1,8 @@
+plugins/modules/backup_target.py validate-modules:missing-gplv3-license
+plugins/modules/backup_target_info.py validate-modules:missing-gplv3-license
+plugins/modules/workload.py validate-modules:missing-gplv3-license
+plugins/modules/workload_info.py validate-modules:missing-gplv3-license
+plugins/modules/workload_reassign.py validate-modules:missing-gplv3-license
+plugins/modules/workload_restore.py validate-modules:missing-gplv3-license
+plugins/modules/workload_snapshot.py validate-modules:missing-gplv3-license
+plugins/modules/workload_snapshot_info.py validate-modules:missing-gplv3-license

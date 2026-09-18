@@ -11,7 +11,7 @@ DOCUMENTATION = r'''
 ---
 module: workload_reassign
 short_description: Reassign Trilio for OpenStack workloads to a new tenant/user
-version_added: "1.0.1"
+version_added: "1.1.0"
 description:
   - Reassign ownership of one or more Trilio workloads and their associated backup snapshot chains
     from a source OpenStack tenant (project) to a target tenant and user.

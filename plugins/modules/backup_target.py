@@ -123,7 +123,6 @@ options:
     description:
       - Whether to validate SSL/TLS certificates.
     type: bool
-    default: true
     aliases: ['verify']
   ca_cert:
     description:
@@ -269,7 +268,7 @@ def run_module():
         nfs_mount_opts=dict(type='str'),
         s3_endpoint_url=dict(type='str'),
         s3_bucket=dict(type='str'),
-        secret_ref=dict(type='str'),
+        secret_ref=dict(type='str', no_log=False),
         btt_name=dict(type='str'),
         is_default=dict(type='bool', default=False),
         immutable=dict(type='bool', default=False),

@@ -473,7 +473,6 @@ class TrilioClient:
             url = re.sub(r'/v1/([0-9a-fA-F]{32}|[0-9a-fA-F-]{36})', '/v1/' + self.project_id, url)
         return url
 
-
     @property
     def base_endpoint(self):
         """

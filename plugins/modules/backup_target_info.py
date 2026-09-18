@@ -68,7 +68,6 @@ options:
     description:
       - Whether to validate SSL/TLS certificates.
     type: bool
-    default: true
     aliases: ['verify']
   ca_cert:
     description:

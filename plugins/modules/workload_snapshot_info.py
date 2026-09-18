@@ -11,7 +11,7 @@ DOCUMENTATION = r"""
 ---
 module: workload_snapshot_info
 short_description: Retrieve detailed information and network topology from Trilio for OpenStack workload snapshots
-version_added: "1.0.1"
+version_added: "1.1.0"
 description:
   - Retrieve detailed information, instances, and network topology from snapshots of Trilio for OpenStack workloads.
   - Useful for inspecting which instances and networks (with subnets and CIDRs) are contained in a backup before restoring.
