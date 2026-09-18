@@ -129,6 +129,7 @@ class TrilioClient:
             if self.params.get('auth'):
                 conn_kwargs['auth'] = self.params.get('auth')
                 conn_kwargs['load_env'] = False
+                conn_kwargs['load_envvars'] = False
                 conn_kwargs['load_yaml_config'] = False
             if self.params.get('auth_type'):
                 conn_kwargs['auth_type'] = self.params.get('auth_type')
