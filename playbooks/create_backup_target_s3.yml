@@ -96,57 +96,39 @@
       no_log: true
       when: barbican_secret_ref == ''
 
-    - name: Create or resolve Barbican secret
+    - name: Check if Barbican secret already exists via OpenStack CLI
+      ansible.builtin.command:
+        cmd: "openstack secret list --name {{ barbican_secret_name }} -f json"
+      environment:
+        OS_CLOUD: "{{ cloud_name }}"
+      register: cli_list_result
+      changed_when: false
+      failed_when: false
       when: barbican_secret_ref == ''
-      block:
-        - name: 1. Store S3 credentials in Barbican (using openstack.cloud.resource)
-          openstack.cloud.resource:
-            cloud: "{{ cloud_name }}"
-            service: key_manager
-            type: secret
-            attributes:
-              name: "{{ barbican_secret_name }}"
-              payload: "{{ s3_secret_payload | to_json }}"
-              payload_content_type: "text/plain"
-              secret_type: "passphrase"
-          no_log: true
-          register: barbican_res_out
 
-        - name: Extract secret_ref URL from openstack.cloud.resource
-          ansible.builtin.set_fact:
-            target_secret_ref: "{{ barbican_res_out.resource.secret_ref | default(barbican_res_out.resource.id) }}"
-          when: barbican_res_out is defined and barbican_res_out.resource is defined
+    - name: Store S3 credential payload in Barbican via OpenStack CLI
+      ansible.builtin.command:
+        cmd: >-
+          openstack secret store
+          --name {{ barbican_secret_name }}
+          --payload '{{ s3_secret_payload | to_json }}'
+          -f json
+      environment:
+        OS_CLOUD: "{{ cloud_name }}"
+      no_log: true
+      register: cli_store_result
+      changed_when: true
+      when:
+        - barbican_secret_ref == ''
+        - (cli_list_result.stdout | default('[]') | from_json | length) == 0
 
-      rescue:
-        - name: "Fallback: Check if Barbican secret already exists via OpenStack CLI"
-          ansible.builtin.command:
-            cmd: "openstack secret list --name {{ barbican_secret_name }} -f json"
-          environment:
-            OS_CLOUD: "{{ cloud_name }}"
-          register: cli_list_result
-          changed_when: false
-          failed_when: false
-
-        - name: "Fallback: Store S3 credential payload in Barbican via OpenStack CLI"
-          ansible.builtin.command:
-            cmd: >-
-              openstack secret store
-              --name {{ barbican_secret_name }}
-              --payload '{{ s3_secret_payload | to_json }}'
-              -f json
-          environment:
-            OS_CLOUD: "{{ cloud_name }}"
-          no_log: true
-          register: cli_store_result
-          changed_when: true
-          when: (cli_list_result.stdout | default('[]') | from_json | length) == 0
-
-        - name: Extract secret_ref URL from OpenStack CLI
-          ansible.builtin.set_fact:
-            target_secret_ref: >-
-              {{ (cli_list_result.stdout | from_json)[0]['Secret href'] | default((cli_list_result.stdout | from_json)[0].secret_ref)
-                 if ((cli_list_result.stdout | default('[]') | from_json | length) > 0)
-                 else ((cli_store_result.stdout | from_json).secret_ref | default((cli_store_result.stdout | from_json)['Secret href'])) }}
+    - name: Extract secret_ref URL from Barbican secret
+      ansible.builtin.set_fact:
+        target_secret_ref: >-
+          {{ (cli_list_result.stdout | from_json)[0]['Secret href'] | default((cli_list_result.stdout | from_json)[0].secret_ref)
+             if ((cli_list_result.stdout | default('[]') | from_json | length) > 0)
+             else ((cli_store_result.stdout | from_json).secret_ref | default((cli_store_result.stdout | from_json)['Secret href'])) }}
+      when: barbican_secret_ref == ''
 
     - name: Set final secret_ref for Trilio
       ansible.builtin.set_fact:

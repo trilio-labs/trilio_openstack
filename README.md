@@ -35,7 +35,7 @@ In Trilio 6.2+, **plaintext S3 credentials are no longer accepted in API request
 2. The resulting Barbican secret URL (`secret_ref`, e.g. `https://barbican:9311/v1/secrets/<uuid>`) is passed to the Trilio API.
 3. DMS securely fetches the credentials from Barbican at mount time using the requesting job's Keystone token.
 
-Rather than requiring manual out-of-band secret creation and URL copying, the included [`playbooks/create_backup_target_s3.yml`](file:///Users/kevinjackson/Trilio/Ansible/ansible_collections/trilio/trilio_openstack/playbooks/create_backup_target_s3.yml) automates this: it prompts for credentials (or reads from Ansible Vault / environment), registers the secret payload in Barbican using standard Ansible OpenStack automation (`openstack.cloud.resource` or CLI), and immediately feeds the resulting `secret_ref` URL to Trilio.
+Rather than requiring manual out-of-band secret creation and URL copying, the included [`playbooks/create_backup_target_s3.yml`](file:///Users/kevinjackson/Trilio/Ansible/ansible_collections/trilio/trilio_openstack/playbooks/create_backup_target_s3.yml) automates this: it prompts for credentials (or reads from Ansible Vault / environment), registers the secret payload in Barbican using standard OpenStack automation (via OpenStack CLI or direct secret reference), and immediately feeds the resulting `secret_ref` URL to Trilio.
 
 ### Role-Based Access Control (RBAC) & Personas
 
@@ -607,7 +607,7 @@ Registers a new NFS backup target and automatically creates the linked Backup Ta
 ```
 
 ### 2. Register an S3 Backup Target with Barbican Secret (`playbooks/create_backup_target_s3.yml`)
-Platform engineers do not need to manually construct Barbican JSON payloads or copy/paste raw `secret_ref` URLs. This playbook accepts S3 credentials securely (interactively with hidden typing, via Ansible Vault, environment variables, or `-e`), registers the secret in OpenStack Barbican using native Ansible OpenStack automation (`openstack.cloud.resource` with CLI fallback), and automatically passes the resolved `secret_ref` URL to Trilio:
+Platform engineers do not need to manually construct Barbican JSON payloads or copy/paste raw `secret_ref` URLs. This playbook accepts S3 credentials securely (interactively with hidden typing, via Ansible Vault, environment variables, or `-e`), registers the secret in OpenStack Barbican via OpenStack CLI, and automatically passes the resolved `secret_ref` URL to Trilio:
 
 ```bash
 # Interactive prompt (Access key and hidden Secret key):
@@ -669,7 +669,7 @@ Creates an automated daily backup workload protecting compute instances:
           fullbackup_interval: "-1"
 ```
 
-### 4. End-to-End Discovery & Protection (`playbooks/setup_trilio_end_to_end.yml`)
+### 4. End-to-End Discovery & Protection (`examples/setup_trilio_end_to_end.yml`)
 Combines `openstack.cloud.server_info`, `trilio.trilio_openstack.backup_target`, and `trilio.trilio_openstack.workload` in a unified workflow:
 ```yaml
 - name: Discover VMs and Setup Trilio Protection

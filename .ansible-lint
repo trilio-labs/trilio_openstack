@@ -9,3 +9,4 @@ exclude_paths:
   - changelogs
   - docs
   - .ansible
+  - examples

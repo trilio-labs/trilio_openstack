@@ -9,6 +9,8 @@ permissions:
   contents: read
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -22,3 +24,5 @@ concurrency:
 jobs:
   call:
     uses: ansible-collections/partner-certification-checker/.github/workflows/certification-reusable.yml@v5.0.0 # zizmor: ignore[unpinned-uses]
+    with:
+      collection-deps: "openstack.cloud"
